@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS login_ip_failures (ip TEXT PRIMARY KEY, failures INTEGER NOT NULL CHECK(failures BETWEEN 1 AND 3));

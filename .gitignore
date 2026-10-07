@@ -1,0 +1,18 @@
+.tools/
+.local/
+target/
+node_modules/
+dist/
+playwright-report/
+test-results/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+.env
+__pycache__/
+docs
+
+
+# Local upstream reference checkout; not part of Ergent.
+/release/

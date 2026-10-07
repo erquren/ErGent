@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="glass" x1="0.12" y1="0.08" x2="0.88" y2="0.92">
+      <stop offset="0" stop-color="#6EDCFF"/>
+      <stop offset="0.28" stop-color="#238BFF"/>
+      <stop offset="0.62" stop-color="#4D45F5"/>
+      <stop offset="1" stop-color="#A66BFF"/>
+    </linearGradient>
+    <linearGradient id="inner" x1="0.05" y1="0.05" x2="0.95" y2="0.95">
+      <stop offset="0" stop-color="#164DDA" stop-opacity=".96"/>
+      <stop offset=".52" stop-color="#258FEF" stop-opacity=".78"/>
+      <stop offset="1" stop-color="#67E3FF" stop-opacity=".9"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity=".9"/>
+      <stop offset=".32" stop-color="#FFFFFF" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="14" result="blur"/>
+      <feOffset dy="10" result="off"/>
+      <feColorMatrix in="off" type="matrix"
+        values="0 0 0 0 0.08  0 0 0 0 0.25  0 0 0 0 0.75  0 0 0 .34 0" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="shapeClip">
+      <path d="M112 104 Q112 72 144 72 H383 Q413 72 402 98 L349 171 H285 L319 184 Q330 188 319 201 L286 240 L337 240 Q349 240 355 249 L402 310 Q414 327 389 327 H144 Q112 327 112 295 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- Soft glass shadow / aura -->
+  <path d="M112 104 Q112 72 144 72 H383 Q413 72 402 98 L349 171 H285 L319 184 Q330 188 319 201 L286 240 L337 240 Q349 240 355 249 L402 310 Q414 327 389 327 H144 Q112 327 112 295 Z"
+        fill="#2D8FFF" opacity=".18" filter="url(#shadow)"/>
+
+  <!-- Main glass emblem -->
+  <path d="M112 104 Q112 72 144 72 H383 Q413 72 402 98 L349 171 H285 L319 184 Q330 188 319 201 L286 240 L337 240 Q349 240 355 249 L402 310 Q414 327 389 327 H144 Q112 327 112 295 Z"
+        fill="url(#glass)" stroke="#BCEEFF" stroke-width="5" stroke-opacity=".82" filter="url(#glow)"/>
+
+  <!-- Inner translucent layer -->
+  <path d="M128 112 Q128 91 149 91 H365 L327 146 H266 Q247 146 261 160 L284 181 L267 202 L244 224 Q234 234 249 248 H325 L364 298 H150 Q128 298 128 276 Z"
+        fill="url(#inner)" opacity=".72"/>
+
+  <!-- Glass highlight -->
+  <path d="M127 112 Q127 91 150 91 H365 L327 145 H268 Q249 145 262 160 L281 179 L239 219 Q228 229 241 241 H154 Q127 241 127 214 Z"
+        fill="url(#shine)" opacity=".72" clip-path="url(#shapeClip)"/>
+
+  <!-- Subtle bottom refraction -->
+  <path d="M125 273 Q160 301 207 300 H365 L391 322 H145 Q119 322 118 295 Z"
+        fill="#B9F5FF" opacity=".16"/>
+
+  <!-- Terminal prompt -->
+  <g filter="url(#glow)">
+    <path d="M180 150 L228 190 L180 230"
+          fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M247 231 H302"
+          fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round"/>
+  </g>
+
+  <!-- Crisp inner glass rim -->
+  <path d="M112 104 Q112 72 144 72 H383 Q413 72 402 98 L349 171 H285"
+        fill="none" stroke="#FFFFFF" stroke-width="3" stroke-opacity=".72"/>
+  <path d="M286 240 H337 Q349 240 355 249 L402 310"
+        fill="none" stroke="#D8FAFF" stroke-width="3" stroke-opacity=".7"/>
+</svg>

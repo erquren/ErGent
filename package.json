@@ -1,0 +1,14 @@
+{
+  "name": "ergent",
+  "private": true,
+  "packageManager": "pnpm@10.17.1",
+  "scripts": {
+    "build": "pnpm --filter @ergent/web build",
+    "typecheck": "pnpm --filter @ergent/web typecheck",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "prettier": "3.6.2"
+  }
+}

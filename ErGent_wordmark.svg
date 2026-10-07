@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 300" width="1100" height="300">
+  <defs>
+    <linearGradient id="wordGradient" x1="0%" y1="20%" x2="100%" y2="80%">
+      <stop offset="0%" stop-color="#172B62"/>
+      <stop offset="18%" stop-color="#246DE2"/>
+      <stop offset="43%" stop-color="#18BDF4"/>
+      <stop offset="67%" stop-color="#3F66F5"/>
+      <stop offset="84%" stop-color="#7258F4"/>
+      <stop offset="100%" stop-color="#A05CFF"/>
+    </linearGradient>
+
+    <linearGradient id="highlight" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity=".85"/>
+      <stop offset="38%" stop-color="#FFFFFF" stop-opacity=".18"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+
+    <filter id="softGlow" x="-20%" y="-40%" width="140%" height="180%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="10" result="blur"/>
+      <feColorMatrix in="blur" type="matrix"
+        values="0 0 0 0 0.20
+                0 0 0 0 0.55
+                0 0 0 0 1
+                0 0 0 .32 0" result="glow"/>
+      <feMerge>
+        <feMergeNode in="glow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="depth" x="-20%" y="-40%" width="140%" height="180%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="b"/>
+      <feOffset dy="8" result="o"/>
+      <feColorMatrix in="o" type="matrix"
+        values="0 0 0 0 .04
+                0 0 0 0 .12
+                0 0 0 0 .35
+                0 0 0 .35 0" result="s"/>
+      <feMerge>
+        <feMergeNode in="s"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Glass wordmark -->
+  <g filter="url(#softGlow)">
+    <text x="550" y="215"
+      text-anchor="middle"
+      font-family="SF Pro Rounded, Avenir Next Rounded, Arial Rounded MT Bold, Nunito, sans-serif"
+      font-size="205"
+      font-weight="800"
+      letter-spacing="-9"
+      fill="url(#wordGradient)"
+      stroke="#BDEFFF"
+      stroke-width="3"
+      stroke-opacity=".72"
+      paint-order="stroke fill"
+      filter="url(#depth)">ErGent</text>
+
+    <!-- glass highlight -->
+    <text x="550" y="209"
+      text-anchor="middle"
+      font-family="SF Pro Rounded, Avenir Next Rounded, Arial Rounded MT Bold, Nunito, sans-serif"
+      font-size="205"
+      font-weight="800"
+      letter-spacing="-9"
+      fill="url(#highlight)"
+      opacity=".34">ErGent</text>
+  </g>
+</svg>
