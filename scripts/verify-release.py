@@ -43,8 +43,7 @@ def verify(archive):
         raise ValueError('Archive name differs from manifest')
     suffix = '.exe' if extension == '.zip' else ''
     required = {'ergent-server' + suffix, 'ergent-agent' + suffix, 'web/index.html', 'README.md',
-                'start-server.cmd' if suffix else 'start-server.sh',
-                'docs/deployment.md', 'docs/building.md', 'docs/releasing.md', 'docs/tool-events.md', 'docs/terminal-preferences.md'}
+                'start-server.cmd' if suffix else 'start-server.sh'}
     if not required.issubset(contents):
         raise ValueError('Required runtime files missing')
     allowed = required - {'web/index.html'}

@@ -39,6 +39,7 @@ struct Session {
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    #[cfg(unix)]
     pid: Option<u32>,
 }
 impl Session {
@@ -172,6 +173,7 @@ impl TerminalManager {
             .spawn_command(command)
             .context("无法启动 Shell")?;
         drop(pair.slave);
+        #[cfg(unix)]
         let pid = child.process_id();
         let killer = child.clone_killer();
         let mut reader = pair.master.try_clone_reader()?;
@@ -207,6 +209,7 @@ impl TerminalManager {
             writer: Mutex::new(writer),
             master: Mutex::new(pair.master),
             killer: Mutex::new(killer),
+            #[cfg(unix)]
             pid,
         });
         sessions.insert(id.into(), session);
