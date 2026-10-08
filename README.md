@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="apps/web/public/branding/logo.svg" alt="ErGent Logo" width="160" height="160" />
+</p>
+
 # Ergent
 
 **版本：v1.0.0**
