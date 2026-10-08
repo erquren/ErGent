@@ -1,0 +1,45 @@
+name: Recover v1.0.0 release assets
+
+on:
+  push:
+    branches: ['fix/recover-v1.0.0-assets-20261008']
+    paths: ['.github/workflows/recover-v1.0.0-assets.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  upload-verified-assets:
+    if: github.repository == 'erquren/ErGent'
+    runs-on: ubuntu-22.04
+    concurrency:
+      group: release-assets-v1.0.0
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test release publication safeguards
+        run: python -m unittest discover -s scripts/tests -v
+      - name: Download existing verified v1.0.0 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          repository: erquren/ErGent
+          run-id: 37733892507
+          artifact-ids: '11530518649'
+          path: release
+          merge-multiple: true
+          github-token: ${{ github.token }}
+      - name: Verify and upload only missing assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/publish-release.py release \
+            --repository erquren/ErGent --tag v1.0.0 \
+            --commit 799b57bbc85519efd1dea802e8c9f1887faa6018
