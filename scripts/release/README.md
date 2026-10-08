@@ -1,11 +1,7 @@
 # Ergent 发布包
 
-首次使用请先阅读 [完整部署教程](docs/deployment.md)；自行编译见 [源码构建](docs/building.md)，全平台发布见 [发布流程](docs/releasing.md)。
-
 本包包含 Server、Agent 和网页资源。同一包可以只运行 Server 或只运行 Agent。
 运行不需要 Rust、Node.js、pnpm 或 Python；AI CLI（Codex / Claude Code / OpenCode）需要自行安装在 Agent 所在机器。
-
-Codex 状态提示和后续工具适配接口见 [工具状态接入](docs/tool-events.md)。
 
 ## 启动 Server
 

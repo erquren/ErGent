@@ -110,9 +110,6 @@ def main():
             subprocess.run([str(dest), '--help'], cwd=bundle, env=env, check=True, stdout=subprocess.DEVNULL)
         shutil.copytree(web, bundle / 'web')
         shutil.copy2(ROOT / 'scripts/release/README.md', bundle / 'README.md')
-        (bundle / 'docs').mkdir()
-        for guide in ('deployment.md', 'building.md', 'releasing.md', 'tool-events.md', 'terminal-preferences.md'):
-            shutil.copy2(ROOT / 'docs' / guide, bundle / 'docs' / guide)
         launcher = 'start-server.cmd' if suffix else 'start-server.sh'
         shutil.copy2(ROOT / 'scripts/release' / launcher, bundle / launcher)
         if not suffix:
