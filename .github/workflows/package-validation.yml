@@ -1,0 +1,73 @@
+name: Package validation
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: windows-2022, target: windows-x86_64, triple: x86_64-pc-windows-msvc }
+          - { runner: windows-11-arm, target: windows-arm64, triple: aarch64-pc-windows-msvc }
+          - { runner: ubuntu-22.04, target: linux-x86_64, triple: x86_64-unknown-linux-gnu }
+          - { runner: ubuntu-22.04-arm, target: linux-arm64, triple: aarch64-unknown-linux-gnu }
+          - { runner: macos-15-intel, target: macos-x86_64, triple: x86_64-apple-darwin }
+          - { runner: macos-15, target: macos-arm64, triple: aarch64-apple-darwin }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.98.1'
+          targets: ${{ matrix.triple }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.17.1'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: package-validation-${{ matrix.target }}
+          cache-directories: target/package
+      - name: Test Rust workspace on target machine
+        run: cargo test --workspace --locked --target ${{ matrix.triple }}
+      - name: Build and package
+        shell: bash
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+        run: python scripts/package.py --target "$PACKAGE_TARGET"
+      - name: Verify archive contents and hashes
+        run: python scripts/verify-release.py release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validation-${{ matrix.target }}
+          path: release/*
+          if-no-files-found: error
+
+  assemble:
+    needs: package
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: validation-*
+          path: release
+          merge-multiple: true
+      - name: Require all six packages and generate checksums
+        run: python3 scripts/verify-release.py release --require-all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ergent-validation-all-platforms
+          path: release/*
+          if-no-files-found: error
