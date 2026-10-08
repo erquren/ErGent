@@ -66,4 +66,4 @@ sh scripts/pnpm.sh test:e2e
 python3 scripts/package.py --expect-version v1.0.0
 ```
 
-本机打包当前平台。推送与项目版本一致的 `v*` 标签后，GitHub Actions 构建并校验全部六个平台，成功后生成含校验和的 Release 草稿。
+本机打包当前平台。推送与项目版本一致的 `v*` 标签后，GitHub Actions 构建并校验全部六个平台。Release 不存在时创建含校验和的草稿；已存在时只补传缺失附件，同名附件须校验一致，不覆盖已有文件。

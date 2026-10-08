@@ -63,6 +63,9 @@ jobs:
 
   assemble:
     needs: package
+    concurrency:
+      group: release-assets-${{ github.ref_name }}
+      cancel-in-progress: false
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -80,15 +83,12 @@ jobs:
           name: ergent-all-platforms
           path: release/*
           if-no-files-found: error
-      - name: Create release draft only after all platforms succeed
+      - name: Create draft or upload missing verified release assets
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo 'Release already exists; refusing to replace published or draft assets.' >&2
-            exit 1
-          fi
-          gh release create "$GITHUB_REF_NAME" release/* \
-            --verify-tag --draft --title "Ergent $GITHUB_REF_NAME" --generate-notes
+          python3 scripts/publish-release.py release \
+            --repository "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME" \
+            --commit "$(git rev-parse HEAD)"
