@@ -156,6 +156,16 @@ function App() {
     [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null),
     [socket, setSocket] = useState<WebSocket | null>(null);
+  const [finishedSession, setFinishedSession] = useState<SessionInfo | null>(
+    null,
+  );
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  useEffect(() => {
+    setFinishedSession((session) =>
+      session?.id === selected ? session : null,
+    );
+  }, [selected]);
   const [connected, setConnected] = useState(false),
     [error, setError] = useState("");
   const [modal, setModal] = useState<
@@ -196,16 +206,18 @@ function App() {
       receivedInventory = false;
       const ws = new WebSocket(
         `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/v1/ws/browser`,
-        "ergent.preview.v2",
+        "ergent.preview.v3",
       );
       const inventory = new InventoryReceiver();
       let inventoryTimer: ReturnType<typeof setTimeout> | undefined;
       wsRef.current = ws;
       ws.onopen = () => {
+        if (disposed || wsRef.current !== ws) return;
         setConnected(true);
         setSocket(ws);
       };
       ws.onmessage = (raw) => {
+        if (disposed || wsRef.current !== ws) return;
         let event: Event;
         try {
           if (
@@ -269,12 +281,14 @@ function App() {
               event.payload.sessions,
             ),
           );
-          const ended = new Set(
-            event.payload.sessions
-              .filter((s) => !["running", "terminating"].includes(s.lifecycle))
-              .map((s) => s.id),
+          // Keep only the selected final surface so its pull stream can drain.
+          // Exited sessions still disappear from the sidebar and are not re-opened.
+          const observed = createdSessions.current.get(selectedRef.current);
+          setFinishedSession(
+            observed && !["running", "terminating"].includes(observed.lifecycle)
+              ? observed
+              : null,
           );
-          setSelected((id) => (id && ended.has(id) ? null : id));
         }
       };
       ws.onclose = () => {
@@ -295,11 +309,19 @@ function App() {
       createdSessions.current = new CreatedSessions();
       clearTimeout(timer);
       wsRef.current?.close();
+      wsRef.current = null;
       setSocket(null);
       setConnected(false);
+      setSelected(null);
+      selectedRef.current = null;
+      setFinishedSession(null);
+      setSessions([]);
+      setMachines([]);
     };
   }, [user]);
-  const active = sessions.find((s) => s.id === selected),
+  const active =
+      sessions.find((s) => s.id === selected) ??
+      (finishedSession?.id === selected ? finishedSession : undefined),
     machine = machines.find((m) => m.id === active?.machineId);
   const visible = machines.filter((m) => !m.revoked),
     online = visible.filter((m) => m.online);
@@ -421,8 +443,11 @@ function App() {
         const observed = tracker.observe(session);
         if (!observed) return;
         setSessions(tracker.visible());
-        if (!["running", "terminating"].includes(observed.lifecycle))
-          setSelected((id) => (id === observed.id ? null : id));
+        if (
+          selectedRef.current === observed.id &&
+          !["running", "terminating"].includes(observed.lifecycle)
+        )
+          setFinishedSession(observed);
       }
     });
 
@@ -723,11 +748,15 @@ function App() {
                     {active.title}
                   </span>
                   <span className="badge">
-                    {!machine?.online
-                      ? t("OFFLINE")
-                      : active.lifecycle === "terminating"
-                        ? t("正在结束")
-                        : t("运行中")}
+                    {active.lifecycle === "exited"
+                      ? t("已退出")
+                      : active.lifecycle === "lost"
+                        ? t("状态未知")
+                        : active.lifecycle === "terminating"
+                          ? t("正在结束")
+                          : !machine?.online
+                            ? t("OFFLINE")
+                            : t("运行中")}
                   </span>
                 </h1>
                 <p>
@@ -736,6 +765,12 @@ function App() {
                 </p>
               </div>
               <div className="page-actions">
+                {active.lifecycle !== "running" &&
+                  active.lifecycle !== "terminating" && (
+                    <button onClick={() => setSelected(null)}>
+                      {t("关闭已结束的终端视图")}
+                    </button>
+                  )}
                 <button
                   aria-label={t("重命名终端")}
                   onClick={() => {

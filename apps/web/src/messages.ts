@@ -1,5 +1,22 @@
 // Canonical UI copy → English. Product names and terminal output are never translated.
 export const english: Record<string, string> = {
+  状态未知: "Status unknown",
+  "终端状态未知 · 无法确认进程退出或最后输出":
+    "Terminal status unknown · Process exit and final output could not be confirmed",
+  "输入队列已满，不会自动重发":
+    "Input queue is full; input will not be resent.",
+  "终端已退出 · 最后输出已接收": "Terminal exited · Final output received",
+  "终端已退出 · 最后输出可能不完整":
+    "Terminal exited · Final output may be incomplete",
+  关闭已结束的终端视图: "Dismiss finished terminal",
+  "终端已退出 · 正在接收最后输出": "Terminal exited · Receiving final output",
+  "输出较快，稍后恢复画面；仍可输入以停止任务":
+    "Output is fast; resyncing shortly. Input remains available to stop the task.",
+  "输入结果未确认，不会自动重发":
+    "Input delivery is unconfirmed; it will not be resent.",
+  历史已重置: "History reset",
+  "已恢复当前画面；较早滚动历史不可用":
+    "Current screen restored; older scrollback is unavailable",
   网页外观: "Appearance",
   外观: "Appearance",
   "选择此刻的光线。": "Choose your preferred light.",

@@ -197,6 +197,19 @@ test("real terminals, card switching, browser refresh, server restart, and write
   await second.close();
   await page.getByRole("button", { name: "接管终端" }).click();
   await expect(page.getByText("已连接 · 输入在设备上执行")).toBeVisible();
+  // Preserve the existing xterm, including scrollback, across a transport restart.
+  await page.locator(".xterm-helper-textarea").focus();
+  await page.keyboard.type(
+    "printf 'HISTORY_START\\n'; i=0; while [ \"$i\" -lt 70 ]; do printf 'HISTORY_%s\\n' \"$i\"; i=$((i+1)); done\n",
+  );
+  await expect(page.locator(".xterm-rows")).toContainText("HISTORY_69");
+  await page.locator(".xterm").evaluate((element) => {
+    (element as HTMLElement).dataset.reconnectProbe = "original";
+  });
+  await page.locator(".xterm-viewport").evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await expect(page.locator(".xterm-rows")).toContainText("FIRST_SUCCESS");
   await stop(server);
   server = startServer();
   await online();
@@ -204,6 +217,11 @@ test("real terminals, card switching, browser refresh, server restart, and write
     timeout: 15000,
   });
   await page.locator(".xterm-helper-textarea").focus();
+  await expect(page.locator(".xterm")).toHaveAttribute(
+    "data-reconnect-probe",
+    "original",
+  );
+  await expect(page.locator(".xterm-rows")).toContainText("FIRST_SUCCESS");
   await page.keyboard.type('printf "RESTART_%s\\n" "$ERGENT_PROBE"\n');
   await expect(page.locator(".xterm-rows")).toContainText("RESTART_still_here");
   await page.screenshot({ path: "test-results/workspace-terminal.png" });
@@ -433,7 +451,9 @@ test("mobile layout, terminal shortcuts and compact viewport", async ({
         includeHidden: true,
       }),
     ).toBeEnabled();
-    await page.getByRole("button", { name: "Ctrl+C", exact: true }).tap();
+    await page
+      .getByRole("button", { name: "Ctrl+C", exact: true, includeHidden: true })
+      .tap();
     await page.getByRole("button", { name: "Ctrl", exact: true }).tap();
     await page.getByRole("button", { name: "发送 Ctrl+L", exact: true }).tap();
     await expect(
@@ -530,7 +550,7 @@ test("rename persists across reconnect and exited terminals disappear", async ({
       await expect(page.getByText("已连接 · 输入在设备上执行")).toBeVisible();
       if (title === "Exit naturally") {
         await page.locator(".xterm-helper-textarea").focus();
-        await page.keyboard.type("exit\n");
+        await page.keyboard.type("printf 'FINAL_%s\\n' 'TAIL'; exit\n");
       } else {
         await page
           .getByRole("button", { name: "结束终端", exact: true })
@@ -542,6 +562,18 @@ test("rename persists across reconnect and exited terminals disappear", async ({
       await expect(
         page.locator(".session-card").filter({ hasText: title }),
       ).toHaveCount(0);
+      await expect(page.getByText("终端已退出 · 最后输出已接收")).toBeVisible();
+      await expect(page.getByRole("heading", { name: title })).toBeVisible();
+      if (title === "Exit naturally")
+        await expect(page.locator(".xterm-rows")).toContainText("FINAL_TAIL");
+      await expect(
+        page.getByRole("button", {
+          name: "Ctrl+C",
+          exact: true,
+          includeHidden: true,
+        }),
+      ).toBeDisabled();
+      await page.getByRole("button", { name: "关闭已结束的终端视图" }).click();
       await expect(
         page.getByRole("heading", { name: "所有设备，一个工作台。" }),
       ).toBeVisible();
@@ -1165,7 +1197,11 @@ for (const exitBeforeReply of [false, true]) {
     let polls = 0;
     let inputs = 0;
     let transfer = 0;
+    let ended = false;
+    let streamId = "";
+    let needsSnapshot = false;
     const inventory = (lifecycle: string) => {
+      ended = lifecycle === "exited";
       const value = JSON.stringify({
         type: "inventory.sync",
         payload: {
@@ -1206,27 +1242,83 @@ for (const exitBeforeReply of [false, true]) {
       inventory("running");
       ws.onMessage((raw) => {
         const command = JSON.parse(raw.toString());
-        if (command.type === "terminal.attach")
+        if (command.type === "terminal.attach") {
+          streamId = command.payload.requestId;
+          needsSnapshot = true;
           ws.send(
             JSON.stringify({
-              type: "terminal.snapshot",
+              type: "terminal.sync",
               payload: {
                 sessionId: session.id,
+                requestId: command.payload.requestId,
+                streamId,
+                epoch: session.agentEpoch,
                 seq: "0",
+                head: "0",
+                revision: "0",
                 cols: 80,
                 rows: 24,
-                first: true,
-                last: true,
-                dataBase64: "Y2xvc2UgdGVzdA==",
+                reset: true,
               },
             }),
           );
+        }
+        if (command.type === "terminal.pull") {
+          if (needsSnapshot) {
+            needsSnapshot = false;
+            ws.send(
+              JSON.stringify({
+                type: "terminal.snapshot",
+                payload: {
+                  sessionId: session.id,
+                  streamId,
+                  epoch: session.agentEpoch,
+                  seq: "0",
+                  index: 0,
+                  first: true,
+                  last: true,
+                  dataBase64: "Y2xvc2UgdGVzdA==",
+                },
+              }),
+            );
+          } else if (ended) {
+            ws.send(
+              JSON.stringify({
+                type: "terminal.ended",
+                payload: {
+                  sessionId: session.id,
+                  streamId,
+                  epoch: session.agentEpoch,
+                  seq: "0",
+                  complete: true,
+                  available: true,
+                  truncated: false,
+                },
+              }),
+            );
+          } else {
+            ws.send(
+              JSON.stringify({
+                type: "terminal.output",
+                payload: {
+                  sessionId: session.id,
+                  streamId,
+                  epoch: session.agentEpoch,
+                  from: "0",
+                  seq: "0",
+                  dataBase64: "",
+                },
+              }),
+            );
+          }
+        }
         if (command.type === "terminal.lease.claim")
           ws.send(
             JSON.stringify({
               type: "terminal.lease.changed",
               payload: {
                 sessionId: session.id,
+                streamId,
                 leaseId: "lease",
                 writable: true,
               },
@@ -1291,6 +1383,17 @@ for (const exitBeforeReply of [false, true]) {
       await expect(page.locator(".page-heading .badge")).toHaveText("正在结束");
       inventory("exited");
     }
+    await expect(page.locator(".page-heading .badge")).toHaveText("已退出");
+    await expect(page.getByText("终端已退出 · 最后输出已接收")).toBeVisible();
+    await expect(page.locator(".xterm-rows")).toContainText("close test");
+    await expect(
+      page.getByRole("button", {
+        name: "Ctrl+C",
+        exact: true,
+        includeHidden: true,
+      }),
+    ).toBeDisabled();
+    await page.getByRole("button", { name: "关闭已结束的终端视图" }).click();
     await expect(page.locator(".terminal-page")).toHaveCount(0);
     await expect(
       page.locator(".session-card").filter({ hasText: session.title }),
@@ -1346,7 +1449,7 @@ test("cross-user isolation, agent restart, close, and device revocation", async 
       Upgrade: "websocket",
       "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
       "Sec-WebSocket-Version": "13",
-      "Sec-WebSocket-Protocol": "ergent.preview.v2",
+      "Sec-WebSocket-Protocol": "ergent.preview.v3",
     },
   });
   expect(badOrigin.status()).toBe(403);
@@ -1497,7 +1600,7 @@ test("cross-user isolation, agent restart, close, and device revocation", async 
       Upgrade: "websocket",
       "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
       "Sec-WebSocket-Version": "13",
-      "Sec-WebSocket-Protocol": "ergent.preview.v2",
+      "Sec-WebSocket-Protocol": "ergent.preview.v3",
     },
   });
   expect(reconnect.status()).toBe(401);

@@ -1,3 +1,4 @@
+mod recovery;
 mod screen;
 mod tool_status;
 #[cfg(windows)]
@@ -17,7 +18,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     io::{Read, Write},
     path::Path,
-    sync::Arc,
+    sync::{mpsc, Arc},
     time::{Duration, Instant},
 };
 use tokio::sync::broadcast;
@@ -28,15 +29,32 @@ struct Lease {
     id: String,
     expires: Instant,
 }
+struct ViewerStream {
+    id: String,
+    seq: u64,
+    revision: u64,
+    snapshot: Option<(Vec<u8>, usize)>,
+    completed: bool,
+}
 struct State {
     info: SessionInfo,
     parser: Option<vt100::Parser>,
-    seq: u64,
+    recovery: recovery::Recovery,
+    streams: HashMap<String, ViewerStream>,
+    final_seq: Option<u64>,
+    final_snapshot: Option<(u64, Vec<u8>)>,
+    output_deadline: Option<Instant>,
     viewers: HashSet<String>,
     lease: Option<Lease>,
     tool_events: VecDeque<String>,
     tool_turns: VecDeque<(String, String)>,
     inputs: VecDeque<(String, String, bool)>,
+}
+struct QueuedInput {
+    viewer: String,
+    lease_id: String,
+    input_id: String,
+    bytes: Vec<u8>,
 }
 struct Session {
     event_token: String,
@@ -46,6 +64,7 @@ struct Session {
     close_lock: Mutex<()>,
 }
 struct Resources {
+    input: mpsc::SyncSender<QueuedInput>,
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<ProcessKiller>,
@@ -233,19 +252,25 @@ impl TerminalManager {
         let state = Arc::new(Mutex::new(State {
             info: info.clone(),
             parser: Some(vt100::Parser::new(config.rows, config.cols, 0)),
-            seq: 0,
+            recovery: recovery::Recovery::new(),
+            streams: HashMap::new(),
+            final_seq: None,
+            final_snapshot: None,
+            output_deadline: None,
             viewers: HashSet::new(),
             lease: None,
             tool_events: VecDeque::new(),
             tool_turns: VecDeque::new(),
             inputs: VecDeque::new(),
         }));
+        let (input, input_rx) = mpsc::sync_channel::<QueuedInput>(32);
         let session = Arc::new(Session {
             event_token,
             config,
             state: state.clone(),
             close_lock: Mutex::new(()),
             resources: Mutex::new(Some(Arc::new(Resources {
+                input,
                 writer: Mutex::new(writer),
                 master: Mutex::new(pair.master),
                 killer: Mutex::new(killer),
@@ -253,8 +278,57 @@ impl TerminalManager {
                 pid,
             }))),
         });
+        let input_session = Arc::downgrade(&session);
+        let input_events = self.events.clone();
+        std::thread::spawn(move || {
+            // One bounded FIFO and one writer per session. A non-reading child
+            // cannot block the Agent socket loop, recovery pulls or heartbeats.
+            while let Ok(input) = input_rx.recv() {
+                let Some(session) = input_session.upgrade() else {
+                    break;
+                };
+                let result = (|| -> Result<()> {
+                    let resources = session
+                        .resources
+                        .lock()
+                        .clone()
+                        .ok_or_else(|| anyhow!("terminal has exited"))?;
+                    let mut writer = resources.writer.lock();
+                    check_lease(&session.state.lock(), &input.viewer, &input.lease_id)?;
+                    writer.write_all(&input.bytes)?;
+                    Ok(())
+                })();
+                let mut state = session.state.lock();
+                if result.is_ok() {
+                    if let Some((_, _, written)) = state
+                        .inputs
+                        .iter_mut()
+                        .find(|(viewer, id, _)| viewer == &input.viewer && id == &input.input_id)
+                    {
+                        *written = true;
+                    }
+                    send(
+                        &input_events,
+                        &input.viewer,
+                        Event::InputAck {
+                            input_id: input.input_id,
+                        },
+                    );
+                } else {
+                    // A write error may mean partial delivery. Never retry it.
+                    send(
+                        &input_events,
+                        &input.viewer,
+                        Event::InputRejected {
+                            session_id: state.info.id.clone(),
+                            input_id: input.input_id,
+                            message: "输入结果未确认，不会自动重发".into(),
+                        },
+                    );
+                }
+            }
+        });
         sessions.insert(id.into(), session.clone());
-        let events = self.events.clone();
         let read_state = state.clone();
         #[cfg(unix)]
         let exited_at = Arc::new(Mutex::new(None::<Instant>));
@@ -297,27 +371,13 @@ impl TerminalManager {
                     Ok(0) => break true,
                     Ok(n) => {
                         let mut s = read_state.lock();
-                        let Some(parser) = s.parser.as_mut() else {
-                            // ConPTY close can wait for its output pipe to drain. Continue
-                            // draining (without retaining a screen) until it closes that pipe.
-                            #[cfg(windows)]
-                            continue;
-                            #[cfg(not(windows))]
+                        let State {
+                            parser, recovery, ..
+                        } = &mut *s;
+                        let Some(parser) = parser.as_mut() else {
                             break false;
                         };
-                        parser.process(&buffer[..n]);
-                        s.seq += 1;
-                        let data = STANDARD.encode(&buffer[..n]);
-                        for viewer in &s.viewers {
-                            let _ = events.send(AgentEvent::Viewer {
-                                viewer_id: viewer.clone(),
-                                event: Event::Output {
-                                    session_id: s.info.id.clone(),
-                                    seq: s.seq.to_string(),
-                                    data_base64: data.clone(),
-                                },
-                            });
-                        }
+                        recovery.process(parser, &buffer[..n]);
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                     #[cfg(unix)]
@@ -379,6 +439,8 @@ impl TerminalManager {
         for session in self.sessions.lock().values() {
             let mut s = session.state.lock();
             s.viewers.remove(viewer);
+            s.streams.remove(viewer);
+            release_finished(&mut s);
             if s.lease.as_ref().is_some_and(|l| l.viewer == viewer) {
                 s.lease = None;
             }
@@ -388,12 +450,40 @@ impl TerminalManager {
         for session in self.sessions.lock().values() {
             let mut s = session.state.lock();
             s.viewers.clear();
+            s.streams.clear();
+            release_finished(&mut s);
             s.lease = None;
         }
     }
     pub fn expire_leases(&self) {
         for session in self.sessions.lock().values() {
             let mut s = session.state.lock();
+            if s.output_deadline
+                .is_some_and(|deadline| deadline <= Instant::now())
+            {
+                for (viewer, stream) in &s.streams {
+                    if !stream.completed {
+                        send(
+                            &self.events,
+                            viewer,
+                            Event::Ended {
+                                session_id: s.info.id.clone(),
+                                stream_id: stream.id.clone(),
+                                epoch: s.info.agent_epoch.clone(),
+                                seq: s.final_seq.unwrap().to_string(),
+                                complete: false,
+                                available: false,
+                                truncated: true,
+                            },
+                        );
+                    }
+                }
+                s.info.output_truncated = true;
+                clear_finished(&mut s);
+                let _ = self.events.send(AgentEvent::Session {
+                    session: s.info.clone(),
+                });
+            }
             if s.lease
                 .as_ref()
                 .is_some_and(|l| l.expires <= Instant::now())
@@ -404,6 +494,11 @@ impl TerminalManager {
                         &self.events,
                         viewer,
                         Event::Lease {
+                            stream_id: s
+                                .streams
+                                .get(viewer)
+                                .map(|v| v.id.clone())
+                                .unwrap_or_default(),
                             session_id: s.info.id.clone(),
                             lease_id: None,
                             writable: false,
@@ -417,41 +512,181 @@ impl TerminalManager {
         let session = self.get(command.session_id())?;
         let mut s = session.state.lock();
         match command {
-            BrowserCommand::Attach { .. } => {
+            BrowserCommand::Attach {
+                request_id,
+                epoch,
+                seq,
+                revision,
+                cols,
+                rows,
+                ..
+            } => {
+                if request_id.len() > 64 {
+                    bail!("无效同步 ID");
+                }
                 if s.viewers.len() >= 8 && !s.viewers.contains(viewer) {
                     bail!("观看者数量已达上限");
                 }
-                // Snapshot + subscription registration share the reader lock: no output can slip between them.
-                let parser = s
-                    .parser
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("terminal has exited"))?;
-                let data = screen::snapshot(parser.screen());
-                let chunks: Vec<_> = data.chunks(16 * 1024).collect();
-                for (i, chunk) in chunks.iter().enumerate() {
-                    send(
-                        &self.events,
-                        viewer,
-                        Event::Snapshot {
-                            session_id: s.info.id.clone(),
-                            seq: s.seq.to_string(),
-                            cols: s.info.cols,
-                            rows: s.info.rows,
-                            first: i == 0,
-                            last: i + 1 == chunks.len(),
-                            data_base64: STANDARD.encode(chunk),
-                        },
-                    );
+                let cursor = seq.as_deref().and_then(|v| v.parse::<u64>().ok());
+                let resume = epoch.as_ref() == Some(&s.info.agent_epoch)
+                    && revision.as_deref().and_then(|v| v.parse::<u64>().ok())
+                        == Some(s.recovery.revision)
+                    && cols == Some(s.info.cols)
+                    && rows == Some(s.info.rows)
+                    && cursor.is_some_and(|v| s.recovery.contains(v));
+                let (seq, snapshot) = if resume {
+                    (cursor.unwrap(), None)
+                } else {
+                    let snapshot = if s.final_seq.is_some() {
+                        s.final_snapshot.clone()
+                    } else {
+                        s.parser
+                            .as_ref()
+                            .and_then(|parser| s.recovery.snapshot(parser))
+                    };
+                    let Some((seq, bytes)) = snapshot else {
+                        if s.final_seq.is_some() {
+                            send(
+                                &self.events,
+                                viewer,
+                                Event::Unavailable {
+                                    session_id: s.info.id.clone(),
+                                    request_id,
+                                },
+                            );
+                            return Ok(());
+                        }
+                        bail!("等待完整终端序列后重新同步");
+                    };
+                    (seq, Some((bytes, 0)))
+                };
+                let stream_id = Uuid::new_v4().to_string();
+                let revision = s.recovery.revision;
+                // Snapshot/cursor and registration share the reader lock. A new
+                // attachment invalidates the previous attachment's write lease.
+                if s.lease.as_ref().is_some_and(|l| l.viewer == viewer) {
+                    s.lease = None;
                 }
+                s.streams.insert(
+                    viewer.into(),
+                    ViewerStream {
+                        id: stream_id.clone(),
+                        seq,
+                        revision,
+                        snapshot,
+                        completed: false,
+                    },
+                );
                 s.viewers.insert(viewer.into());
+                send(
+                    &self.events,
+                    viewer,
+                    Event::Sync {
+                        session_id: s.info.id.clone(),
+                        request_id,
+                        stream_id,
+                        epoch: s.info.agent_epoch.clone(),
+                        seq: seq.to_string(),
+                        head: s.recovery.seq.to_string(),
+                        revision: revision.to_string(),
+                        cols: s.info.cols,
+                        rows: s.info.rows,
+                        reset: !resume,
+                    },
+                );
+            }
+            BrowserCommand::Pull { stream_id, seq, .. } => {
+                let session_id = s.info.id.clone();
+                let epoch = s.info.agent_epoch.clone();
+                let Some(mut stream) = s.streams.remove(viewer) else {
+                    bail!("请重新连接终端");
+                };
+                if stream.id != stream_id {
+                    s.streams.insert(viewer.into(), stream);
+                    return Ok(()); // An obsolete socket/attachment cannot alter the new stream.
+                }
+                let event = if seq.parse::<u64>().ok() != Some(stream.seq)
+                    || stream.revision != s.recovery.revision
+                {
+                    Event::Resync {
+                        session_id,
+                        stream_id,
+                        reason: "cursor_changed".into(),
+                    }
+                } else if s.final_seq == Some(stream.seq) && stream.snapshot.is_none() {
+                    stream.completed = true;
+                    Event::Ended {
+                        session_id,
+                        stream_id,
+                        epoch,
+                        seq: stream.seq.to_string(),
+                        complete: true,
+                        available: true,
+                        truncated: s.info.output_truncated,
+                    }
+                } else if let Some((bytes, offset)) = &mut stream.snapshot {
+                    let end = (*offset + recovery::CHUNK_BYTES).min(bytes.len());
+                    let event = Event::Snapshot {
+                        session_id,
+                        stream_id,
+                        epoch,
+                        seq: stream.seq.to_string(),
+                        index: (*offset / recovery::CHUNK_BYTES) as u32,
+                        first: *offset == 0,
+                        last: end == bytes.len(),
+                        data_base64: STANDARD.encode(&bytes[*offset..end]),
+                    };
+                    *offset = end;
+                    if end == bytes.len() {
+                        stream.snapshot = None;
+                    }
+                    event
+                } else if let Some(bytes) = s.recovery.read(stream.seq) {
+                    let from = stream.seq.to_string();
+                    stream.seq += bytes.len() as u64;
+                    Event::Output {
+                        session_id,
+                        stream_id,
+                        epoch,
+                        from,
+                        seq: stream.seq.to_string(),
+                        data_base64: STANDARD.encode(bytes),
+                    }
+                } else if let Some(seq) = s.final_seq.filter(|_| s.final_snapshot.is_none()) {
+                    Event::Ended {
+                        session_id,
+                        stream_id,
+                        epoch,
+                        seq: seq.to_string(),
+                        complete: false,
+                        available: false,
+                        truncated: true,
+                    }
+                } else {
+                    Event::Resync {
+                        session_id,
+                        stream_id,
+                        reason: "replay_expired".into(),
+                    }
+                };
+                s.streams.insert(viewer.into(), stream);
+                release_finished(&mut s);
+                send(&self.events, viewer, event);
             }
             BrowserCommand::Detach { .. } => {
                 s.viewers.remove(viewer);
+                s.streams.remove(viewer);
+                release_finished(&mut s);
                 if s.lease.as_ref().is_some_and(|l| l.viewer == viewer) {
                     s.lease = None;
                 }
             }
-            BrowserCommand::Claim { force, .. } => {
+            BrowserCommand::Claim {
+                force, stream_id, ..
+            } => {
+                if !s.streams.get(viewer).is_some_and(|v| v.id == stream_id) {
+                    bail!("终端连接已更新");
+                }
                 if !s.viewers.contains(viewer) || s.info.lifecycle != "running" {
                     bail!("请先连接正在运行的终端");
                 }
@@ -464,6 +699,11 @@ impl TerminalManager {
                         &self.events,
                         viewer,
                         Event::Lease {
+                            stream_id: s
+                                .streams
+                                .get(viewer)
+                                .map(|v| v.id.clone())
+                                .unwrap_or_default(),
                             session_id: s.info.id.clone(),
                             lease_id: None,
                             writable: false,
@@ -482,6 +722,7 @@ impl TerminalManager {
                         &self.events,
                         v,
                         Event::Lease {
+                            stream_id: s.streams.get(v).map(|v| v.id.clone()).unwrap_or_default(),
                             session_id: s.info.id.clone(),
                             lease_id: (v == viewer).then(|| id.clone()),
                             writable: v == viewer,
@@ -523,24 +764,33 @@ impl TerminalManager {
                     }
                     s.inputs.push_back((viewer.into(), input_id.clone(), false));
                 }
-                // A blocking PTY write must never hold the screen lock: the reader
-                // needs it to keep draining output, including echoed pasted input.
-                drop(s);
+                // Queue accepted bytes once. The dedicated FIFO checks the lease
+                // again immediately before writing, without holding the screen lock.
                 let resources = session
                     .resources
                     .lock()
                     .clone()
                     .ok_or_else(|| anyhow!("terminal has exited"))?;
-                resources.writer.lock().write_all(&bytes)?;
-                let mut s = session.state.lock();
-                if let Some((_, _, written)) = s
-                    .inputs
-                    .iter_mut()
-                    .find(|(v, id, _)| v == viewer && id == &input_id)
+                if resources
+                    .input
+                    .try_send(QueuedInput {
+                        viewer: viewer.into(),
+                        lease_id,
+                        input_id: input_id.clone(),
+                        bytes,
+                    })
+                    .is_err()
                 {
-                    *written = true;
+                    send(
+                        &self.events,
+                        viewer,
+                        Event::InputRejected {
+                            session_id: s.info.id.clone(),
+                            input_id,
+                            message: "输入队列已满，不会自动重发".into(),
+                        },
+                    );
                 }
-                send(&self.events, viewer, Event::InputAck { input_id });
             }
             BrowserCommand::Resize {
                 lease_id,
@@ -550,18 +800,32 @@ impl TerminalManager {
             } => {
                 check_lease(&s, viewer, &lease_id)?;
                 validate_size(cols, rows).map_err(|e| anyhow!(e))?;
-                let resources = session
-                    .resources
-                    .lock()
-                    .clone()
-                    .ok_or_else(|| anyhow!("terminal has exited"))?;
-                resources.master.lock().resize(size(cols, rows))?;
-                s.parser
-                    .as_mut()
-                    .ok_or_else(|| anyhow!("terminal has exited"))?
-                    .set_size(rows, cols);
-                s.info.cols = cols;
-                s.info.rows = rows;
+                if s.info.cols != cols || s.info.rows != rows {
+                    let resources = session
+                        .resources
+                        .lock()
+                        .clone()
+                        .ok_or_else(|| anyhow!("terminal has exited"))?;
+                    resources.master.lock().resize(size(cols, rows))?;
+                    s.parser
+                        .as_mut()
+                        .ok_or_else(|| anyhow!("terminal has exited"))?
+                        .set_size(rows, cols);
+                    s.recovery.resized();
+                    s.info.cols = cols;
+                    s.info.rows = rows;
+                    for (viewer, stream) in &s.streams {
+                        send(
+                            &self.events,
+                            viewer,
+                            Event::Resync {
+                                session_id: s.info.id.clone(),
+                                stream_id: stream.id.clone(),
+                                reason: "resized".into(),
+                            },
+                        );
+                    }
+                }
             }
         }
         Ok(())
@@ -589,18 +853,36 @@ fn record_exit(
     s.info.exit_code = result.ok();
     s.info.output_truncated |= exited && !drained;
     if exited {
+        s.final_seq = Some(s.recovery.seq);
+        if !s.viewers.is_empty() {
+            s.final_snapshot = s
+                .parser
+                .as_ref()
+                .and_then(|parser| s.recovery.snapshot(parser));
+            s.output_deadline = Some(Instant::now() + Duration::from_secs(60));
+        }
+        for (viewer, stream) in &s.streams {
+            send(
+                events,
+                viewer,
+                Event::Ended {
+                    session_id: s.info.id.clone(),
+                    stream_id: stream.id.clone(),
+                    epoch: s.info.agent_epoch.clone(),
+                    seq: s.recovery.seq.to_string(),
+                    complete: false,
+                    available: true,
+                    truncated: s.info.output_truncated,
+                },
+            );
+        }
+        release_finished(&mut s);
         s.parser = None;
         s.inputs = VecDeque::new();
         s.tool_events = VecDeque::new();
         s.tool_turns = VecDeque::new();
     }
     revoke_lease(&mut s, events);
-    if exited && !drained {
-        for viewer in &s.viewers {
-            send(events, viewer, Event::error("OUTPUT_TRUNCATED", "Terminal exited before all output could be drained; final output may be incomplete."));
-        }
-    }
-    s.viewers = HashSet::new();
     let _ = events.send(AgentEvent::Session {
         session: s.info.clone(),
     });
@@ -642,11 +924,29 @@ fn revoke_lease(s: &mut State, events: &broadcast::Sender<AgentEvent>) {
             events,
             viewer,
             Event::Lease {
+                stream_id: s
+                    .streams
+                    .get(viewer)
+                    .map(|v| v.id.clone())
+                    .unwrap_or_default(),
                 session_id: s.info.id.clone(),
                 lease_id: None,
                 writable: false,
             },
         );
+    }
+}
+fn clear_finished(state: &mut State) {
+    state.recovery.clear();
+    state.final_snapshot = None;
+    state.output_deadline = None;
+    for stream in state.streams.values_mut() {
+        stream.snapshot = None;
+    }
+}
+fn release_finished(state: &mut State) {
+    if state.final_seq.is_some() && state.streams.values().all(|stream| stream.completed) {
+        clear_finished(state);
     }
 }
 fn send(events: &broadcast::Sender<AgentEvent>, viewer: &str, event: Event) {
@@ -709,7 +1009,11 @@ mod tests {
                 tool_status: None,
             },
             parser: Some(vt100::Parser::new(24, 80, 0)),
-            seq: 0,
+            recovery: recovery::Recovery::new(),
+            streams: HashMap::new(),
+            final_seq: None,
+            final_snapshot: None,
+            output_deadline: None,
             viewers: HashSet::from(["viewer".into()]),
             lease: Some(Lease {
                 viewer: "viewer".into(),
@@ -939,6 +1243,118 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
+    fn reconnect_invalidates_streams_and_rechecks_queued_writes() {
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = Arc::new(TerminalManager::new("machine".into(), "epoch".into()));
+        manager
+            .create(
+                "s",
+                CreateTerminal {
+                    title: "test".into(),
+                    cwd: tmp.path().to_string_lossy().into(),
+                    cols: 80,
+                    rows: 24,
+                },
+            )
+            .unwrap();
+        let attach = || BrowserCommand::Attach {
+            session_id: "s".into(),
+            request_id: "request".into(),
+            epoch: None,
+            seq: None,
+            revision: None,
+            cols: None,
+            rows: None,
+        };
+        manager.handle("v", attach()).unwrap();
+        let session = manager.get("s").unwrap();
+        let old_stream = session.state.lock().streams["v"].id.clone();
+        manager
+            .handle(
+                "v",
+                BrowserCommand::Claim {
+                    session_id: "s".into(),
+                    stream_id: old_stream.clone(),
+                    force: false,
+                },
+            )
+            .unwrap();
+        let old_lease = session.state.lock().lease.as_ref().unwrap().id.clone();
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let resources = session.resources.lock().clone().unwrap();
+        let _original_writer = std::mem::replace(
+            &mut *resources.writer.lock(),
+            Box::new(Capture(captured.clone())),
+        );
+        let writer = resources.writer.lock();
+        let mut events = manager.events();
+        let pending = manager.clone();
+        let (queued, received) = mpsc::channel();
+        let write = std::thread::spawn(move || {
+            queued
+                .send(pending.handle(
+                    "v",
+                    BrowserCommand::Input {
+                        session_id: "s".into(),
+                        lease_id: old_lease,
+                        input_id: "queued".into(),
+                        data_base64: STANDARD.encode(b"must not be written"),
+                    },
+                ))
+                .unwrap();
+        });
+        assert!(received
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .is_ok());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while session.state.lock().inputs.is_empty() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        manager.handle("v", attach()).unwrap();
+        drop(writer);
+        write.join().unwrap();
+        loop {
+            if let Ok(AgentEvent::Viewer {
+                event: Event::InputRejected { input_id, .. },
+                ..
+            }) = events.try_recv()
+            {
+                if input_id == "queued" {
+                    break;
+                }
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(captured.lock().is_empty());
+        assert!(manager
+            .handle(
+                "v",
+                BrowserCommand::Claim {
+                    session_id: "s".into(),
+                    stream_id: old_stream,
+                    force: true
+                }
+            )
+            .is_err());
+        assert!(session.state.lock().lease.is_none());
+        manager.close("s").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn actual_pty_survives_detach_and_create_is_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
         let manager = TerminalManager::new("machine".into(), "epoch".into());
@@ -956,13 +1372,23 @@ mod tests {
                 "v",
                 BrowserCommand::Attach {
                     session_id: "s".into(),
+                    request_id: "test".into(),
+                    epoch: None,
+                    seq: None,
+                    revision: None,
+                    cols: None,
+                    rows: None,
                 },
             )
             .unwrap();
+        let stream_id = manager.get("s").unwrap().state.lock().streams["v"]
+            .id
+            .clone();
         manager
             .handle(
                 "v",
                 BrowserCommand::Claim {
+                    stream_id,
                     session_id: "s".into(),
                     force: false,
                 },
@@ -978,7 +1404,6 @@ mod tests {
         };
         assert!(manager.handle("intruder", input(lease.clone())).is_err());
         manager.handle("v", input(lease)).unwrap();
-        manager.disconnect("v");
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if session
@@ -996,6 +1421,7 @@ mod tests {
             assert!(Instant::now() < deadline, "PTY did not produce output");
             std::thread::sleep(Duration::from_millis(20));
         }
+        manager.disconnect("v");
         assert_eq!(session.state.lock().info.lifecycle, "running");
         manager.close("s").unwrap();
     }

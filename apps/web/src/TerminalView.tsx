@@ -1,22 +1,10 @@
 import { t, useLanguage } from "./i18n";
-import { randomId } from "./browser";
+import { TerminalConnection } from "./terminal-connection";
 import { useEffect, useRef, useState } from "react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import type {
-  BrowserCommand,
-  Event,
-  SessionInfo,
-} from "../../../packages/protocol-ts";
+import type { SessionInfo } from "../../../packages/protocol-ts";
 import "@xterm/xterm/css/xterm.css";
-
-const bytes = (data: string) =>
-  Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
-function base64(data: Uint8Array) {
-  let text = "";
-  for (const byte of data) text += String.fromCharCode(byte);
-  return btoa(text);
-}
 
 export function TerminalView({
   session,
@@ -28,15 +16,16 @@ export function TerminalView({
   theme: ITheme;
 }) {
   useLanguage();
-  const lifecycle = useRef(session.lifecycle);
-  lifecycle.current = session.lifecycle;
-  const running = session.lifecycle === "running";
   const themeRef = useRef(theme);
   themeRef.current = theme;
+  const lifecycleRef = useRef(session.lifecycle);
+  lifecycleRef.current = session.lifecycle;
+  const running = session.lifecycle === "running";
   const container = useRef<HTMLDivElement>(null);
   const [writable, setWritable] = useState(false);
   const [notice, setNotice] = useState("正在同步终端…");
   const [dimensions, setDimensions] = useState("");
+  const [historyLost, setHistoryLost] = useState(false);
   const [ctrl, setCtrl] = useState(false);
   const ctrlRef = useRef(false);
   const terminal = useRef<Terminal | null>(null);
@@ -50,19 +39,12 @@ export function TerminalView({
     sendInput.current(data);
   };
   const claim = useRef<() => void>(() => {});
+  const connection = useRef<TerminalConnection | null>(null);
   useEffect(() => {
     setWritable(false);
     setControl(false);
-    if (!socket || !container.current) {
-      setNotice("连接已断开，本机任务继续运行");
-      return;
-    }
-    let disposed = false,
-      lease: string | null = null,
-      sequence: bigint | null = null,
-      queued = 0;
-    let receivingSnapshot = true;
-    const pending = new Set<string>();
+    setHistoryLost(false);
+    if (!container.current) return;
     const term = new Terminal({
       cursorBlink: true,
       fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
@@ -76,146 +58,36 @@ export function TerminalView({
     term.open(container.current);
     terminal.current = term;
     fit.fit();
-    const send = (command: BrowserCommand) => {
-      if (socket.readyState === WebSocket.OPEN && !disposed)
-        socket.send(JSON.stringify(command));
-    };
+    let canWrite = false;
     const resize = () => {
-      if (!lease) return;
+      if (!canWrite || lifecycleRef.current !== "running") return;
       fit.fit();
       const cols = Math.max(20, Math.min(500, term.cols)),
         rows = Math.max(5, Math.min(200, term.rows));
-      send({
-        type: "terminal.resize",
-        payload: { sessionId: session.id, leaseId: lease, cols, rows },
-      });
+      transport.resize(cols, rows);
       setDimensions(`${cols} × ${rows}`);
     };
+    const transport = new TerminalConnection(
+      session.id,
+      term,
+      setNotice,
+      (value) => {
+        canWrite = value;
+        setWritable(value);
+        if (!value) setControl(false);
+      },
+      () => {
+        resize();
+        if (!matchMedia("(pointer: coarse)").matches && innerWidth > 760)
+          term.focus();
+      },
+      () => setHistoryLost(true),
+      () => lifecycleRef.current,
+    );
+    connection.current = transport;
     const observer = new ResizeObserver(resize);
     observer.observe(container.current);
-    const write = (data: string, done?: () => void) => {
-      const value = bytes(data);
-      queued += value.length;
-      if (queued > 2 * 1024 * 1024) {
-        setNotice("输出较快，重新连接以同步画面…");
-        socket.close();
-        return;
-      }
-      term.write(value, () => {
-        queued -= value.length;
-        if (!disposed) done?.();
-      });
-    };
-    const message = (raw: MessageEvent) => {
-      let event: Event;
-      try {
-        event = JSON.parse(raw.data);
-      } catch {
-        socket.close();
-        return;
-      }
-      const p = event.payload;
-      if ("sessionId" in p && p.sessionId !== session.id) return;
-      switch (event.type) {
-        case "terminal.snapshot": {
-          const p = event.payload;
-          if (p.first) {
-            receivingSnapshot = true;
-            sequence = BigInt(p.seq);
-            term.reset();
-            term.resize(p.cols, p.rows);
-          }
-          write(
-            p.dataBase64,
-            p.last
-              ? () => {
-                  receivingSnapshot = false;
-                  setNotice("只读 · 可以接管此终端");
-                  if (lifecycle.current === "running")
-                    send({
-                      type: "terminal.lease.claim",
-                      payload: { sessionId: session.id, force: false },
-                    });
-                }
-              : undefined,
-          );
-          break;
-        }
-        case "terminal.output": {
-          const p = event.payload,
-            next = BigInt(p.seq);
-          if (sequence === null || next !== sequence + 1n) {
-            setNotice("输出序列缺失，正在重新同步…");
-            socket.close();
-            return;
-          }
-          sequence = next;
-          write(p.dataBase64);
-          break;
-        }
-        case "terminal.lease.changed":
-          lease = event.payload.leaseId;
-          setWritable(event.payload.writable);
-          if (!event.payload.writable) setControl(false);
-          setNotice(
-            event.payload.writable
-              ? t("已连接 · 输入在设备上执行")
-              : t("只读 · 其他窗口可能正在操作"),
-          );
-          if (lease) {
-            resize();
-            if (!matchMedia("(pointer: coarse)").matches && innerWidth > 760)
-              term.focus();
-          }
-          break;
-        case "terminal.input.ack":
-          pending.delete(event.payload.inputId);
-          break;
-        case "error":
-          setNotice(event.payload.message);
-          break;
-      }
-    };
-    socket.addEventListener("message", message);
-    const onClose = () => {
-      lease = null;
-      setWritable(false);
-      setNotice(
-        pending.size
-          ? t("连接中断：部分输入结果未知，未自动重发")
-          : t("连接中断，任务继续运行"),
-      );
-    };
-    socket.addEventListener("close", onClose);
-    const transmit = (data: string) => {
-      if (
-        lifecycle.current !== "running" ||
-        !lease ||
-        receivingSnapshot ||
-        socket.readyState !== WebSocket.OPEN
-      )
-        return;
-      const encoded = new TextEncoder().encode(data);
-      for (let offset = 0; offset < encoded.length; offset += 8192) {
-        const inputId = randomId();
-        pending.add(inputId);
-        if (pending.size > 256) {
-          setNotice("输入尚未确认，已暂停连接；不会自动重发");
-          socket.close();
-          break;
-        }
-        send({
-          type: "terminal.input",
-          payload: {
-            sessionId: session.id,
-            leaseId: lease,
-            inputId,
-            dataBase64: base64(encoded.slice(offset, offset + 8192)),
-          },
-        });
-      }
-    };
-    sendInput.current = transmit;
+    sendInput.current = (data) => transport.transmit(data);
     const input = term.onData((data) => {
       if (ctrlRef.current) {
         setControl(false);
@@ -226,34 +98,26 @@ export function TerminalView({
               : String.fromCharCode(data.toUpperCase().charCodeAt(0) & 31);
         }
       }
-      transmit(data);
+      transport.transmit(data);
     });
-    claim.current = () =>
-      send({
-        type: "terminal.lease.claim",
-        payload: { sessionId: session.id, force: true },
-      });
-    const renew = setInterval(() => {
-      if (lease)
-        send({
-          type: "terminal.lease.renew",
-          payload: { sessionId: session.id, leaseId: lease },
-        });
-    }, 10000);
-    send({ type: "terminal.attach", payload: { sessionId: session.id } });
+    claim.current = () => transport.claim();
     return () => {
-      send({ type: "terminal.detach", payload: { sessionId: session.id } });
-      disposed = true;
-      clearInterval(renew);
+      transport.dispose();
       observer.disconnect();
       input.dispose();
-      socket.removeEventListener("message", message);
-      socket.removeEventListener("close", onClose);
+      connection.current = null;
       sendInput.current = () => {};
+      claim.current = () => {};
       terminal.current = null;
       term.dispose();
     };
+  }, [session.id]);
+  useEffect(() => {
+    connection.current?.connect(socket);
   }, [session.id, socket]);
+  useEffect(() => {
+    connection.current?.lifecycleChanged(session.outputTruncated);
+  }, [session.id, session.lifecycle, session.outputTruncated]);
   useEffect(() => {
     if (terminal.current) terminal.current.options.theme = theme;
   }, [theme]);
@@ -362,11 +226,14 @@ export function TerminalView({
       <div className="terminal-status">
         <span>
           <i className={writable ? "dot green" : "dot"} />
-          {session.lifecycle === "terminating"
-            ? t("正在结束 · 等待进程退出")
-            : t(notice)}
+          {t(notice)}
         </span>
         <span>
+          {historyLost && (
+            <span title={t("已恢复当前画面；较早滚动历史不可用")}>
+              {t("历史已重置")} ·{" "}
+            </span>
+          )}
           {dimensions}
           {!writable && socket && session.lifecycle === "running" && (
             <button onClick={() => claim.current()}>{t("接管终端")}</button>

@@ -125,3 +125,22 @@ test("truncation survives stale same-epoch HTTP results and inventories but not 
   expect(tracker.receive([machine], [nextEpoch])).toEqual([nextEpoch]);
   expect(tracker.observe(exited)).toEqual(nextEpoch);
 });
+
+test("selected final metadata stays monotonic but disappears with its owning machine", () => {
+  const tracker = new CreatedSessions();
+  tracker.receive([machine], [session]);
+  const final = {
+    ...session,
+    lifecycle: "exited",
+    exitCode: 0,
+    outputTruncated: true,
+  };
+  tracker.observe(final);
+  tracker.receive([machine], [session]);
+  expect(tracker.get(session.id)).toMatchObject(final);
+  expect(tracker.visible()).toEqual([]);
+  tracker.receive([{ ...machine, revoked: true }], [final]);
+  expect(tracker.get(session.id)).toBeUndefined();
+  tracker.receive([], []);
+  expect(tracker.get(session.id)).toBeUndefined();
+});
