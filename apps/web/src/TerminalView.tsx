@@ -61,11 +61,11 @@ export function TerminalView({
     const inputWritable = (value: boolean) => {
       // Match the renderer's native input state to the transport gate. During
       // recovery/read-only leases, keystrokes must not appear to be accepted or
-      // queue up for later replay. Keep focus so mobile recovery need not reopen
-      // the keyboard, while exposing the boundary to assistive technology.
+      // queue up for later replay. Expose the boundary to assistive technology
+      // without blurring or setting native readOnly: changing native editability
+      // during a viewport resize can disturb a mobile software keyboard.
       term.options.disableStdin = !value;
       if (term.textarea) {
-        term.textarea.readOnly = !value;
         term.textarea.setAttribute("aria-readonly", String(!value));
       }
     };

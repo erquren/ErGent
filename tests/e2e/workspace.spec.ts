@@ -1014,7 +1014,7 @@ test("language follows the device, persists across tabs, and keeps the terminal 
     await expect(
       page.getByText("Syncing terminal…", { exact: true }),
     ).toBeVisible();
-    await expect(input).toHaveAttribute("readonly", "");
+    await expect(input).not.toHaveAttribute("readonly", "");
     await expect(input).toHaveAttribute("aria-readonly", "true");
     const beforeBlockedInput = inputFrames;
     await input.focus();
