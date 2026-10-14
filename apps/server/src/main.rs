@@ -33,9 +33,18 @@ enum Command {
         #[arg(long, default_value = "admin")]
         username: String,
     },
-    /// Clear the persistent login failure count for an IP.
-    LoginUnblock { ip: std::net::IpAddr },
+    /// Clear an IP's login throttle and atomically record an audit event.
+    LoginUnblock {
+        ip: std::net::IpAddr,
+        /// Operator label saved in the local audit trail.
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        reason: String,
+    },
     Run {
+        #[command(flatten)]
+        login_policy: login_guard::Policy,
         #[arg(long, default_value = "127.0.0.1:7777")]
         listen: std::net::SocketAddr,
         #[arg(long, default_value = "http://127.0.0.1:7777")]
@@ -65,6 +74,7 @@ pub struct App {
     hub: Arc<Mutex<Hub>>,
     trusted_proxies: Vec<std::net::IpAddr>,
     login_locks: Arc<[Mutex<()>; 64]>,
+    login_policy: login_guard::Policy,
 }
 #[derive(Default)]
 struct Hub {
@@ -189,14 +199,15 @@ async fn main() -> anyhow::Result<()> {
             auth::create_admin(&db, &username, password.trim_end_matches(['\r', '\n'])).await?;
             println!("管理员已创建：{username}");
         }
-        Command::LoginUnblock { ip } => {
-            sqlx::query("DELETE FROM login_ip_failures WHERE ip=?")
-                .bind(login_guard::normalize(ip).to_string())
-                .execute(&db)
-                .await?;
-            println!("登录失败计数已清除：{ip}");
+        Command::LoginUnblock { ip, actor, reason } => {
+            let audit_id = login_guard::unblock(&db, ip, &actor, &reason).await?;
+            println!(
+                "登录限制已清除：{}；审计记录：{audit_id}",
+                login_guard::normalize(ip)
+            );
         }
         Command::Run {
+            login_policy,
             listen,
             origin,
             additional_origin,
@@ -205,6 +216,7 @@ async fn main() -> anyhow::Result<()> {
             allow_any_origin,
             web,
         } => {
+            login_policy.validate()?;
             let parsed = origin::validate(&origin, allow_insecure_lan)?;
             let mut allowed_origins = vec![origin.clone()];
             for extra in additional_origin {
@@ -237,6 +249,7 @@ async fn main() -> anyhow::Result<()> {
                     .map(login_guard::normalize)
                     .collect(),
                 login_locks: Arc::new(std::array::from_fn(|_| Mutex::new(()))),
+                login_policy,
             };
             let api = Router::new()
                 .route("/auth/csrf", get(auth::get_csrf))

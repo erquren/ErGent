@@ -140,19 +140,28 @@ pub async fn login(
     // Fixed-size striped locks bound memory use under arbitrary source addresses.
     let _guard = app.login_locks[crate::login_guard::stripe(ip)].lock().await;
     let key = ip.to_string();
-    let failures: i64 = sqlx::query_scalar(
-        "SELECT COALESCE((SELECT failures FROM login_ip_failures WHERE ip=?),0)",
-    )
-    .bind(&key)
-    .fetch_one(&app.db)
-    .await?;
-    if failures >= 3 {
-        return Err(crate::login_guard::invalid_login());
+    // SQLite also serializes admission with another server process or CLI unlock.
+    // Keep the transaction through verification/session issuance so a successful
+    // request cannot erase a later failure or resurrect state after an unlock.
+    let mut tx = app.db.begin_with("BEGIN IMMEDIATE").await?;
+    let attempt_at = now();
+    sqlx::query("DELETE FROM login_ip_limits WHERE window_started_at<=? AND blocked_until<=?")
+        .bind(attempt_at.saturating_sub(i64::from(app.login_policy.window_seconds)))
+        .bind(attempt_at)
+        .execute(&mut *tx)
+        .await?;
+    let previous = crate::login_guard::FailureState::load(&mut tx, &key).await?;
+    if let Some(state) = previous {
+        let retry_after = state.retry_after(attempt_at);
+        if retry_after > 0 {
+            tx.commit().await?;
+            return Ok(crate::login_guard::throttled(retry_after));
+        }
     }
     let user = if body.password.len() <= 1024 && body.username.len() <= 120 {
         sqlx::query("SELECT id,password_hash FROM users WHERE username=?")
             .bind(&body.username)
-            .fetch_optional(&app.db)
+            .fetch_optional(&mut *tx)
             .await?
     } else {
         None
@@ -172,14 +181,24 @@ pub async fn login(
         false
     };
     if !verified {
-        sqlx::query("INSERT INTO login_ip_failures(ip,failures) VALUES(?,1) ON CONFLICT(ip) DO UPDATE SET failures=MIN(failures+1,3)")
-            .bind(&key).execute(&app.db).await?;
+        let failed_at = now();
+        let state =
+            crate::login_guard::FailureState::failed(previous, &app.login_policy, failed_at);
+        state.save(&mut tx, &key).await?;
+        tx.commit().await?;
+        let retry_after = state.retry_after(failed_at);
+        if retry_after > 0 {
+            return Ok(crate::login_guard::throttled(retry_after));
+        }
         return Err(crate::login_guard::invalid_login());
     }
+    sqlx::query("DELETE FROM login_ip_limits WHERE ip=?")
+        .bind(&key)
+        .execute(&mut *tx)
+        .await?;
     let id: String = user.ok_or_else(ApiError::internal)?.get("id");
     let token = secret();
     let new_csrf = secret();
-    let mut tx = app.db.begin().await?;
     sqlx::query("DELETE FROM web_sessions WHERE token_hash=?")
         .bind(hash(&old))
         .execute(&mut *tx)
@@ -263,6 +282,7 @@ mod login_tests {
             trusted_proxies: vec![],
             hub: Arc::new(Mutex::new(crate::Hub::default())),
             login_locks: Arc::new(std::array::from_fn(|_| Mutex::new(()))),
+            login_policy: crate::login_guard::Policy::default(),
         }
     }
     async fn attempt(app: &App, ip: &str, username: &str, password: &str) -> Response {
@@ -314,67 +334,221 @@ mod login_tests {
         assert_eq!(data["error"]["code"], "INVALID_CREDENTIALS");
         assert_eq!(data["error"]["message"], "账号或密码错误");
     }
+    async fn assert_throttled(response: Response) -> i64 {
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        let seconds = response.headers()[header::RETRY_AFTER]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let data = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let data: serde_json::Value = serde_json::from_slice(&data).unwrap();
+        assert_eq!(data["error"]["code"], "LOGIN_THROTTLED");
+        seconds
+    }
+
+    async fn failure_state(app: &App, ip: &str) -> crate::login_guard::FailureState {
+        crate::login_guard::FailureState::load(&mut app.db.acquire().await.unwrap(), ip)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
     #[tokio::test]
-    async fn failures_are_cumulative_persistent_and_ip_scoped() {
+    async fn backoff_is_persistent_ip_scoped_and_blocked_requests_do_not_extend_it() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("server.db");
         let first = app(&path).await;
         create_admin(&first.db, "admin", "correct-password")
             .await
             .unwrap();
-        assert_denied(attempt(&first, "192.0.2.1", "missing", "wrong").await).await;
+        for _ in 0..4 {
+            assert_denied(attempt(&first, "192.0.2.1", "missing", "wrong").await).await;
+        }
         assert_eq!(
-            attempt(&first, "192.0.2.1", "admin", "correct-password")
-                .await
-                .status(),
-            StatusCode::OK
+            assert_throttled(attempt(&first, "::ffff:192.0.2.1", "missing", "wrong").await).await,
+            30
         );
-        assert_denied(attempt(&first, "192.0.2.1", "admin", "wrong").await).await;
-        assert_denied(attempt(&first, "::ffff:192.0.2.1", "admin", "wrong").await).await;
-        assert_denied(attempt(&first, "192.0.2.1", "admin", "correct-password").await).await;
+        let previous = failure_state(&first, "192.0.2.1").await;
+        assert_throttled(attempt(&first, "192.0.2.1", "admin", "correct-password").await).await;
+        assert_eq!(failure_state(&first, "192.0.2.1").await, previous);
         first.db.close().await;
         let reopened = app(&path).await;
-        assert_denied(attempt(&reopened, "192.0.2.1", "admin", "correct-password").await).await;
+        assert_throttled(attempt(&reopened, "192.0.2.1", "admin", "correct-password").await).await;
+        assert_eq!(failure_state(&reopened, "192.0.2.1").await, previous);
         assert_eq!(
             attempt(&reopened, "192.0.2.2", "admin", "correct-password")
                 .await
                 .status(),
             StatusCode::OK
         );
-        sqlx::query("DELETE FROM login_ip_failures WHERE ip=?")
-            .bind("192.0.2.1")
+
+        // Advance the stored deadline without sleeping; the same window remains active.
+        sqlx::query("UPDATE login_ip_limits SET blocked_until=? WHERE ip='192.0.2.1'")
+            .bind(now())
             .execute(&reopened.db)
             .await
             .unwrap();
         assert_eq!(
-            attempt(&reopened, "192.0.2.1", "admin", "correct-password")
-                .await
-                .status(),
-            StatusCode::OK
+            assert_throttled(attempt(&reopened, "192.0.2.1", "missing", "wrong").await).await,
+            60
         );
+        assert_eq!(failure_state(&reopened, "192.0.2.1").await.failures, 6);
     }
+
     #[tokio::test]
-    async fn concurrent_failures_cannot_lose_increments() {
+    async fn window_expiry_and_success_reset_failures() {
         let tmp = tempfile::tempdir().unwrap();
         let app = app(&tmp.path().join("server.db")).await;
         create_admin(&app.db, "admin", "correct-password")
             .await
             .unwrap();
-        let (a, b, c, d) = tokio::join!(
-            attempt(&app, "192.0.2.3", "admin", "wrong"),
-            attempt(&app, "192.0.2.3", "admin", "wrong"),
-            attempt(&app, "192.0.2.3", "admin", "wrong"),
-            attempt(&app, "192.0.2.3", "admin", "wrong")
-        );
-        for response in [a, b, c, d] {
-            assert_denied(response).await;
+        for _ in 0..4 {
+            assert_denied(attempt(&app, "192.0.2.1", "missing", "wrong").await).await;
         }
-        let failures: i64 =
-            sqlx::query_scalar("SELECT failures FROM login_ip_failures WHERE ip='192.0.2.3'")
+        assert_eq!(
+            attempt(&app, "192.0.2.1", "admin", "correct-password")
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM login_ip_limits")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        assert_denied(attempt(&app, "192.0.2.1", "missing", "wrong").await).await;
+        assert_eq!(failure_state(&app, "192.0.2.1").await.failures, 1);
+        sqlx::query(
+            "UPDATE login_ip_limits SET window_started_at=?,failures=4 WHERE ip='192.0.2.1'",
+        )
+        .bind(now() - 900)
+        .execute(&app.db)
+        .await
+        .unwrap();
+        assert_denied(attempt(&app, "192.0.2.1", "missing", "wrong").await).await;
+        assert_eq!(failure_state(&app, "192.0.2.1").await.failures, 1);
+
+        // Expiring the window never cuts short a backoff already issued.
+        sqlx::query(
+            "UPDATE login_ip_limits SET window_started_at=?,blocked_until=? WHERE ip='192.0.2.1'",
+        )
+        .bind(now() - 901)
+        .bind(now() + 30)
+        .execute(&app.db)
+        .await
+        .unwrap();
+        assert_throttled(attempt(&app, "192.0.2.1", "admin", "correct-password").await).await;
+        sqlx::query("UPDATE login_ip_limits SET blocked_until=? WHERE ip='192.0.2.1'")
+            .bind(now())
+            .execute(&app.db)
+            .await
+            .unwrap();
+        assert_eq!(
+            attempt(&app, "192.0.2.1", "admin", "correct-password")
+                .await
+                .status(),
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_failures_across_independent_pools_cannot_bypass_threshold() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("server.db");
+        let first = app(&path).await;
+        let second = app(&path).await; // Separate striped mutexes, as with separate processes.
+        let responses = futures_util::future::join_all((0..12).map(|n| {
+            attempt(
+                if n % 2 == 0 { &first } else { &second },
+                "192.0.2.3",
+                "missing",
+                "wrong",
+            )
+        }))
+        .await;
+        let mut invalid = 0;
+        for response in responses {
+            if response.status() == StatusCode::UNAUTHORIZED {
+                invalid += 1;
+                assert_denied(response).await;
+            } else {
+                assert_throttled(response).await;
+            }
+        }
+        assert_eq!(invalid, 4);
+        assert_eq!(failure_state(&first, "192.0.2.3").await.failures, 5);
+    }
+
+    #[tokio::test]
+    async fn audited_unlock_releases_throttle_and_records_noops() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = app(&tmp.path().join("server.db")).await;
+        create_admin(&app.db, "admin", "correct-password")
+            .await
+            .unwrap();
+        for _ in 0..5 {
+            attempt(&app, "192.0.2.1", "missing", "wrong").await;
+        }
+        let id = crate::login_guard::unblock(
+            &app.db,
+            "::ffff:192.0.2.1".parse().unwrap(),
+            "operator",
+            "Shared NAT confirmed",
+        )
+        .await
+        .unwrap();
+        let row = sqlx::query("SELECT * FROM login_guard_audit WHERE id=?")
+            .bind(id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<String, _>("ip"), "192.0.2.1");
+        assert_eq!(row.get::<String, _>("actor"), "operator");
+        assert_eq!(row.get::<String, _>("reason"), "Shared NAT confirmed");
+        assert_eq!(row.get::<String, _>("action"), "unblock");
+        assert_eq!(row.get::<i64, _>("previous_failures"), 5);
+        assert!(row.get::<i64, _>("previous_blocked_until") >= row.get::<i64, _>("created_at"));
+        assert_eq!(
+            attempt(&app, "192.0.2.1", "admin", "correct-password")
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        let id = crate::login_guard::unblock(
+            &app.db,
+            "192.0.2.1".parse().unwrap(),
+            "operator",
+            "Already reset",
+        )
+        .await
+        .unwrap();
+        let count: i64 =
+            sqlx::query_scalar("SELECT previous_failures FROM login_guard_audit WHERE id=?")
+                .bind(id)
                 .fetch_one(&app.db)
                 .await
                 .unwrap();
-        assert_eq!(failures, 3);
-        assert_denied(attempt(&app, "192.0.2.3", "admin", "correct-password").await).await;
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn unlock_audit_failure_does_not_clear_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = app(&tmp.path().join("server.db")).await;
+        assert_denied(attempt(&app, "192.0.2.1", "missing", "wrong").await).await;
+        sqlx::raw_sql("CREATE TRIGGER reject_audit BEFORE INSERT ON login_guard_audit BEGIN SELECT RAISE(ABORT,'audit unavailable'); END;")
+            .execute(&app.db).await.unwrap();
+        assert!(crate::login_guard::unblock(
+            &app.db,
+            "192.0.2.1".parse().unwrap(),
+            "operator",
+            "Test"
+        )
+        .await
+        .is_err());
+        assert_eq!(failure_state(&app, "192.0.2.1").await.failures, 1);
     }
 }
