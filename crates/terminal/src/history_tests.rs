@@ -232,4 +232,5 @@ fn natural_exit_publishes_large_tail_before_exit_and_runtime_reclamation() {
         .any(|bytes| bytes.iter().all(|b| *b == b'x')));
     assert!(session.resources.lock().is_none());
     assert!(session.state.lock().parser.is_none());
+    assert!(!session.state.lock().info.output_truncated);
 }

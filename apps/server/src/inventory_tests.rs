@@ -47,6 +47,7 @@ fn session(id: &str, epoch: &str, lifecycle: &str) -> SessionInfo {
         cols: 80,
         rows: 24,
         exit_code: None,
+        output_truncated: false,
         tool_status: None,
     }
 }
@@ -415,4 +416,70 @@ async fn websocket_large_hello_inventory_and_incomplete_reconnect() {
     assert_eq!(app.hub.lock().await.sessions.len(), 1501);
     let _ = browser.close(None).await;
     server.abort();
+}
+
+#[tokio::test]
+async fn reconciliation_does_not_invert_operation_writer_and_hub_locks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app(&tmp.path().join("db")).await;
+    // start_operation first inserts while holding a SQLite writer transaction,
+    // then reads the hub. Reconcile must wait for this writer without holding hub.
+    let mut operation = app.db.begin().await.unwrap();
+    sqlx::query("INSERT INTO operations VALUES('op','owner','machine','new','create','key','hash','pending',NULL,0)")
+        .execute(&mut *operation).await.unwrap();
+    let concurrent = app.clone();
+    let reconcile_task = tokio::spawn(async move {
+        reconcile(
+            &concurrent,
+            "machine",
+            "epoch",
+            vec![session("new", "epoch", "running")],
+            "connection",
+        )
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let hub = tokio::time::timeout(Duration::from_millis(500), app.hub.lock())
+        .await
+        .expect("inventory held hub while waiting for the operation's DB writer");
+    assert!(hub.agents.contains_key("machine"));
+    drop(hub);
+    operation.commit().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), reconcile_task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(app.hub.lock().await.sessions.contains_key("new"));
+}
+
+#[tokio::test]
+async fn truncated_output_marker_survives_inventory_and_storage() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app(&tmp.path().join("db")).await;
+    let mut truncated = session("truncated", "epoch", "exited");
+    truncated.output_truncated = true;
+    reconcile(
+        &app,
+        "machine",
+        "epoch",
+        vec![truncated.clone()],
+        "connection",
+    )
+    .await
+    .unwrap();
+    let saved: String =
+        sqlx::query_scalar("SELECT data FROM terminal_sessions WHERE id='truncated'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(
+        serde_json::from_str::<SessionInfo>(&saved)
+            .unwrap()
+            .output_truncated
+    );
+    let Event::Inventory { sessions, .. } = app.inventory("owner").await.unwrap() else {
+        panic!("wrong event");
+    };
+    assert_eq!(sessions, vec![truncated]);
 }

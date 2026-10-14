@@ -115,6 +115,7 @@ mod tests {
                 cols: 80,
                 rows: 24,
                 exit_code: Some(0),
+                output_truncated: false,
                 tool_status: None,
             })
             .collect()

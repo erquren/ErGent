@@ -28,7 +28,9 @@ ConPTY resources are closed outside the parser lock so their output can keep
 draining. On Unix, a quiet 100 ms poll after shell exit ends the stream even if a
 background descendant still holds a slave handle. Continuous descendant output is
 drained for at most two seconds; a failed/expired drain sends `OUTPUT_TRUNCATED`
-to attached viewers before the final lifecycle event. This boundary does not claim
+to attached viewers before the final lifecycle event, and persists
+`SessionInfo.outputTruncated=true` in the historical metadata. Older stored records
+default this field to false. This boundary does not claim
 to capture future output from detached descendants, and no authoritative exited
 snapshot is retained. Metadata retention is independent of terminal-output retention.
 
@@ -68,8 +70,9 @@ interleaved or malformed chunks close the connection; timeout also reconnects.
 A disconnect discards staging, keeping the last complete list and all stored history.
 `Hello` is acknowledged with `Welcome` and the device is marked ready only after
 complete reconciliation. A later full Agent `Inventory` uses the same transfer rules.
-Server reconciliation validates the entire list, then commits SQLite in one
-transaction before replacing hub metadata. There is no partial lost-session update
+Server reconciliation acquires the SQLite writer transaction before the hub lock
+(the same order used by create/close operations), validates the entire list, then
+commits SQLite in one transaction before replacing hub metadata. There is no partial lost-session update
 if validation or the database transaction fails.
 
 The complete list still requires memory proportional to retained metadata, but

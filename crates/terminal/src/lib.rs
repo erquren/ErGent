@@ -213,6 +213,7 @@ impl TerminalManager {
             cols: config.cols,
             rows: config.rows,
             exit_code: None,
+            output_truncated: false,
             tool_status: None,
         };
         let state = Arc::new(Mutex::new(State {
@@ -338,6 +339,7 @@ impl TerminalManager {
             let mut s = state.lock();
             s.info.lifecycle = "exited".into();
             s.info.exit_code = exit.ok().map(|v| v.exit_code());
+            s.info.output_truncated = exited && !drained;
             s.lease = None;
             // Reclaim only after confirmed exit. A wait error must retain the runtime
             // so it still counts against capacity and can be killed at shutdown.

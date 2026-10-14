@@ -254,6 +254,9 @@ async fn reconcile(
     {
         return Err(ApiError::not_found());
     }
+    // Match start_operation's lock order: SQLite writer first, then hub. A deferred
+    // transaction would not acquire the writer until after hub, causing an inversion.
+    let mut transaction = app.db.begin_with("BEGIN IMMEDIATE").await?;
     // Validate the complete list before changing anything. The hub lock also keeps a
     // replacement connection from publishing a newer inventory during this commit.
     let mut hub = app.hub.lock().await;
@@ -284,7 +287,6 @@ async fn reconcile(
         })
         .collect();
     updates.extend(sessions);
-    let mut transaction = app.db.begin().await?;
     for session in &updates {
         let data = serde_json::to_string(session).map_err(|_| ApiError::internal())?;
         sqlx::query("INSERT INTO terminal_sessions VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data WHERE machine_id=excluded.machine_id")

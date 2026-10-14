@@ -22,6 +22,9 @@ pub struct SessionInfo {
     pub cols: u16,
     pub rows: u16,
     pub exit_code: Option<u32>,
+    // Durable indication that the reader could not finish draining at process exit.
+    #[serde(default)]
+    pub output_truncated: bool,
     #[serde(default)]
     pub tool_status: Option<Box<ToolStatus>>,
 }
