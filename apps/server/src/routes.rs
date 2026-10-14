@@ -390,6 +390,31 @@ async fn start_operation(
         ));
     }
     if inserted {
+        // An authoritative exit is already sufficient for an idempotent close,
+        // even if the Agent disconnected after publishing it.
+        let exited = if kind == "close" {
+            app.hub
+                .lock()
+                .await
+                .sessions
+                .get(&session_id)
+                .filter(|s| s.lifecycle == "exited")
+                .cloned()
+        } else {
+            None
+        };
+        if let Some(session) = exited {
+            sqlx::query("UPDATE operations SET status='accepted',result=? WHERE id=?")
+                .bind(json!({"session":session,"error":null}).to_string())
+                .bind(&id)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            return Ok((
+                StatusCode::ACCEPTED,
+                Json(json!({"data":{"operationId":id,"sessionId":session_id,"status":"accepted"}})),
+            ));
+        }
         let sender = app
             .hub
             .lock()

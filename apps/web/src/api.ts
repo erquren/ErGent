@@ -39,7 +39,7 @@ export interface OperationResult {
 export async function waitOperation(id: string): Promise<OperationResult> {
   for (let n = 0; n < 60; n++) {
     const op = await api<OperationResult>(`/operations/${id}`);
-    if (op.status === "succeeded") return op;
+    if (op.status === "succeeded" || op.status === "accepted") return op;
     if (op.status === "failed") throw new Error(op.result?.error || "操作失败");
     if (op.status === "unknown")
       throw new Error(

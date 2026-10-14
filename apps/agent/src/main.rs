@@ -1,3 +1,4 @@
+mod close_requests;
 mod tool_events;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -181,10 +182,11 @@ async fn main() -> Result<()> {
                 epoch.clone(),
             ));
             let event_listener = tool_events::listen(manager.clone()).await?;
+            let close_limit = close_requests::limit();
             let mut delay = 1;
             loop {
                 manager.reset_connections();
-                let connection = connect(&config, &epoch, &manager);
+                let connection = connect(&config, &epoch, &manager, &close_limit);
                 tokio::select! {
                     result=connection=>{if let Err(error)=result{tracing::warn!(%error,"连接中断，终端继续运行");}}
                     _=tokio::signal::ctrl_c()=>{tracing::info!("停止 Agent，关闭它创建的终端");break;}
@@ -198,7 +200,12 @@ async fn main() -> Result<()> {
     }
     Ok(())
 }
-async fn connect(config: &Config, epoch: &str, manager: &Arc<TerminalManager>) -> Result<()> {
+async fn connect(
+    config: &Config,
+    epoch: &str,
+    manager: &Arc<TerminalManager>,
+    close_limit: &Arc<tokio::sync::Semaphore>,
+) -> Result<()> {
     let mut url = server_url(&config.server)?;
     url.set_scheme(if config.server.starts_with("https:") {
         "wss"
@@ -239,10 +246,15 @@ async fn connect(config: &Config, epoch: &str, manager: &Arc<TerminalManager>) -
     };
     let mut transfer_id = 0;
     send_event(&mut ws, &hello, &mut transfer_id).await?;
+    let mut close_requests = tokio::task::JoinSet::new();
     let mut last = Instant::now();
     let mut tick = tokio::time::interval(Duration::from_secs(10));
     loop {
         tokio::select! {
+            reply=close_requests.join_next(), if !close_requests.is_empty()=>{
+                let reply=reply.context("关闭任务队列为空")??;
+                send_event(&mut ws,&reply,&mut transfer_id).await?;
+            }
             event=events.recv()=>{
                 // Lag means the stream has a gap. Reconnect and require a fresh snapshot instead of corrupting the screen.
                 let event=event.context("输出队列落后，重新同步")?;
@@ -264,8 +276,8 @@ async fn connect(config: &Config, epoch: &str, manager: &Arc<TerminalManager>) -
                                 Some(match result{Ok(session)=>AgentEvent::Operation{operation_id,session:Some(session),error:None},Err(e)=>AgentEvent::Operation{operation_id,session:None,error:Some(e.to_string())}})
                             }
                             AgentCommand::Close{operation_id,session_id}=>{
-                                let m=manager.clone();let result=tokio::task::spawn_blocking(move||m.close(&session_id)).await?;
-                                Some(match result{Ok(session)=>AgentEvent::Operation{operation_id,session:Some(session),error:None},Err(e)=>AgentEvent::Operation{operation_id,session:None,error:Some(e.to_string())}})
+                                let m=manager.clone();
+                                close_requests::queue(&mut close_requests,operation_id,close_limit,move||m.close(&session_id))
                             }
                             AgentCommand::Browser{viewer_id,command}=>{
                                 let m=manager.clone();let v=viewer_id.clone();

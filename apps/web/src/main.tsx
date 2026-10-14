@@ -723,7 +723,11 @@ function App() {
                     {active.title}
                   </span>
                   <span className="badge">
-                    {!machine?.online ? t("OFFLINE") : t("运行中")}
+                    {!machine?.online
+                      ? t("OFFLINE")
+                      : active.lifecycle === "terminating"
+                        ? t("正在结束")
+                        : t("运行中")}
                   </span>
                 </h1>
                 <p>

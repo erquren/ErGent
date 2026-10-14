@@ -28,6 +28,9 @@ export function TerminalView({
   theme: ITheme;
 }) {
   useLanguage();
+  const lifecycle = useRef(session.lifecycle);
+  lifecycle.current = session.lifecycle;
+  const running = session.lifecycle === "running";
   const themeRef = useRef(theme);
   themeRef.current = theme;
   const container = useRef<HTMLDivElement>(null);
@@ -128,10 +131,11 @@ export function TerminalView({
               ? () => {
                   receivingSnapshot = false;
                   setNotice("只读 · 可以接管此终端");
-                  send({
-                    type: "terminal.lease.claim",
-                    payload: { sessionId: session.id, force: false },
-                  });
+                  if (lifecycle.current === "running")
+                    send({
+                      type: "terminal.lease.claim",
+                      payload: { sessionId: session.id, force: false },
+                    });
                 }
               : undefined,
           );
@@ -184,7 +188,12 @@ export function TerminalView({
     };
     socket.addEventListener("close", onClose);
     const transmit = (data: string) => {
-      if (!lease || receivingSnapshot || socket.readyState !== WebSocket.OPEN)
+      if (
+        lifecycle.current !== "running" ||
+        !lease ||
+        receivingSnapshot ||
+        socket.readyState !== WebSocket.OPEN
+      )
         return;
       const encoded = new TextEncoder().encode(data);
       for (let offset = 0; offset < encoded.length; offset += 8192) {
@@ -256,7 +265,7 @@ export function TerminalView({
       <div className="terminal-keys" aria-label={t("终端快捷键")}>
         <div className="key-row">
           <button
-            disabled={!writable}
+            disabled={!writable || !running}
             aria-pressed={ctrl}
             onPointerDown={(e) => e.preventDefault()}
             onClick={() => setControl(!ctrlRef.current)}
@@ -271,7 +280,7 @@ export function TerminalView({
           ].map(([label, value]) => (
             <button
               key={label}
-              disabled={!writable}
+              disabled={!writable || !running}
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => shortcut(value)}
             >
@@ -279,7 +288,7 @@ export function TerminalView({
             </button>
           ))}
           <button
-            disabled={!writable}
+            disabled={!writable || !running}
             onClick={() => terminal.current?.focus()}
           >
             {t("键盘")}
@@ -298,7 +307,7 @@ export function TerminalView({
             <button
               key={label}
               aria-label={t("方向{key}", { key: label })}
-              disabled={!writable}
+              disabled={!writable || !running}
               onPointerDown={(e) => e.preventDefault()}
               onClick={() =>
                 shortcut(
@@ -317,7 +326,7 @@ export function TerminalView({
           ].map(([label, value]) => (
             <button
               key={label}
-              disabled={!writable}
+              disabled={!writable || !running}
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => shortcut(value)}
             >
@@ -332,7 +341,7 @@ export function TerminalView({
               {Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_?").map((key) => (
                 <button
                   key={key}
-                  disabled={!writable}
+                  disabled={!writable || !running}
                   aria-label={t("发送 Ctrl+{key}", { key })}
                   onPointerDown={(e) => e.preventDefault()}
                   onClick={() =>
@@ -353,7 +362,9 @@ export function TerminalView({
       <div className="terminal-status">
         <span>
           <i className={writable ? "dot green" : "dot"} />
-          {t(notice)}
+          {session.lifecycle === "terminating"
+            ? t("正在结束 · 等待进程退出")
+            : t(notice)}
         </span>
         <span>
           {dimensions}

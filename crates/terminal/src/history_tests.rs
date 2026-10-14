@@ -91,6 +91,7 @@ fn more_than_one_thousand_historical_sessions_do_not_consume_live_capacity() {
                 event_token: String::new(),
                 config: config.clone(),
                 resources: Mutex::new(None),
+                close_lock: Mutex::new(()),
                 state: Arc::new(Mutex::new(State {
                     info,
                     parser: None,

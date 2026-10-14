@@ -175,14 +175,7 @@ async fn agent_socket(app: App, mut socket: WebSocket, machine: String, owner: S
                         }
                         AgentEvent::Operation { operation_id, session, error } => {
                             if epoch.is_none() { break; }
-                            let row=sqlx::query("SELECT session_id FROM operations WHERE id=? AND machine_id=?").bind(&operation_id).bind(&machine).fetch_optional(&app.db).await;
-                            let Ok(Some(row))=row else { continue };
-                            if let Some(ref s)=session {
-                                if s.id!=row.get::<String,_>("session_id") || s.machine_id!=machine || Some(&s.agent_epoch)!=epoch.as_ref() { break; }
-                                if save_session(&app,s).await.is_err() { break; }
-                            }
-                            let status=if error.is_some(){"failed"}else{"succeeded"};
-                            let _=sqlx::query("UPDATE operations SET status=?,result=? WHERE id=?").bind(status).bind(json!({"session":session,"error":error}).to_string()).bind(operation_id).execute(&app.db).await;
+                            if record_operation(&app,&machine,epoch.as_deref().unwrap(),&operation_id,session,error).await.is_err() { break; }
                             app.notify_inventory().await;
                         }
                         AgentEvent::Viewer { viewer_id, event } => {
@@ -219,26 +212,87 @@ async fn agent_socket(app: App, mut socket: WebSocket, machine: String, owner: S
     .await;
     app.notify_inventory().await;
 }
-async fn save_session(app: &App, session: &SessionInfo) -> Result<(), ApiError> {
-    // Existing IDs may never move to another device.
-    {
-        let hub = app.hub.lock().await;
-        if hub
-            .sessions
-            .get(&session.id)
-            .is_some_and(|s| s.machine_id != session.machine_id)
+async fn record_operation(
+    app: &App,
+    machine: &str,
+    epoch: &str,
+    operation_id: &str,
+    mut session: Option<SessionInfo>,
+    error: Option<String>,
+) -> Result<(), ApiError> {
+    let row = sqlx::query("SELECT session_id,kind FROM operations WHERE id=? AND machine_id=?")
+        .bind(operation_id)
+        .bind(machine)
+        .fetch_optional(&app.db)
+        .await?;
+    let Some(row) = row else {
+        return Ok(());
+    };
+    if let Some(s) = session.take() {
+        if s.id != row.get::<String, _>("session_id")
+            || s.machine_id != machine
+            || s.agent_epoch != epoch
         {
             return Err(ApiError::not_found());
         }
+        session = Some(save_session(app, &s).await?);
     }
-    let data = serde_json::to_string(session).map_err(|_| ApiError::internal())?;
-    sqlx::query("INSERT INTO terminal_sessions VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data WHERE machine_id=excluded.machine_id").bind(&session.id).bind(&session.machine_id).bind(data).execute(&app.db).await?;
-    app.hub
-        .lock()
-        .await
-        .sessions
-        .insert(session.id.clone(), session.clone());
+    let status = if error.is_some() {
+        "failed"
+    } else if row.get::<String, _>("kind") == "close" {
+        if session
+            .as_ref()
+            .is_some_and(|s| matches!(s.lifecycle.as_str(), "terminating" | "exited"))
+        {
+            "accepted"
+        } else {
+            // An older Agent may reply with running. It has not confirmed the new
+            // close contract, so do not report either acceptance or process exit.
+            "unknown"
+        }
+    } else {
+        "succeeded"
+    };
+    sqlx::query("UPDATE operations SET status=?,result=? WHERE id=?")
+        .bind(status)
+        .bind(json!({"session":session,"error":error}).to_string())
+        .bind(operation_id)
+        .execute(&app.db)
+        .await?;
     Ok(())
+}
+fn preserve_lifecycle(current: &SessionInfo, incoming: &mut SessionInfo) {
+    if current.agent_epoch != incoming.agent_epoch {
+        return;
+    }
+    incoming.output_truncated |= current.output_truncated;
+    // Lifecycle and final-output markers are monotonic even if a delayed close
+    // acknowledgement or inventory arrives after the authoritative wait event.
+    if matches!(current.lifecycle.as_str(), "exited" | "lost")
+        || (current.lifecycle == "terminating" && incoming.lifecycle == "running")
+    {
+        incoming.lifecycle = current.lifecycle.clone();
+        incoming.exit_code = current.exit_code;
+    }
+}
+async fn save_session(app: &App, incoming: &SessionInfo) -> Result<SessionInfo, ApiError> {
+    let mut session = incoming.clone();
+    // Use the same SQLite-writer -> hub ordering as inventory reconciliation and
+    // operation creation. Guarding and persisting must observe one current state.
+    let mut transaction = app.db.begin_with("BEGIN IMMEDIATE").await?;
+    let mut hub = app.hub.lock().await;
+    if let Some(current) = hub.sessions.get(&session.id) {
+        if current.machine_id != session.machine_id {
+            return Err(ApiError::not_found());
+        }
+        preserve_lifecycle(current, &mut session);
+    }
+    let data = serde_json::to_string(&session).map_err(|_| ApiError::internal())?;
+    sqlx::query("INSERT INTO terminal_sessions VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data WHERE machine_id=excluded.machine_id")
+        .bind(&session.id).bind(&session.machine_id).bind(data).execute(&mut *transaction).await?;
+    transaction.commit().await?;
+    hub.sessions.insert(session.id.clone(), session.clone());
+    Ok(session)
 }
 async fn reconcile(
     app: &App,
@@ -277,7 +331,7 @@ async fn reconcile(
         .values()
         .filter(|s| {
             s.machine_id == machine
-                && s.lifecycle == "running"
+                && matches!(s.lifecycle.as_str(), "running" | "terminating")
                 && (s.agent_epoch != epoch || !ids.contains(&s.id))
         })
         .cloned()
@@ -292,15 +346,7 @@ async fn reconcile(
             .get(&session.id)
             .filter(|s| s.agent_epoch == session.agent_epoch)
         {
-            let truncated = current.output_truncated || session.output_truncated;
-            // A delayed inventory cannot revive a completed or already-closing session.
-            // Final output metadata can still arrive after the first exit observation.
-            if matches!(current.lifecycle.as_str(), "exited" | "lost")
-                || (current.lifecycle == "terminating" && session.lifecycle == "running")
-            {
-                session = current.clone();
-            }
-            session.output_truncated = truncated;
+            preserve_lifecycle(current, &mut session);
         }
         session
     }));
@@ -474,6 +520,10 @@ async fn route_browser(
     })?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "close_tests.rs"]
+mod close_tests;
 
 #[cfg(test)]
 #[path = "inventory_tests.rs"]
