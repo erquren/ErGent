@@ -66,3 +66,46 @@ test("revoking a machine clears an unacknowledged create result", () => {
   expect(tracker.receive([{ ...machine, revoked: true }], [])).toEqual([]);
   expect(tracker.accept(session)).toBeUndefined();
 });
+
+test("HTTP close observation stays coherent across pending create, stale inventory and late results", () => {
+  const tracker = new CreatedSessions();
+  tracker.receive([machine], []);
+  tracker.accept(session);
+  const terminating = { ...session, lifecycle: "terminating" };
+  expect(tracker.observe(terminating)).toEqual(terminating);
+  expect(tracker.receive([machine], [])).toEqual([terminating]);
+  expect(tracker.receive([machine], [session])).toEqual([terminating]);
+  expect(tracker.accept(session)).toEqual(terminating);
+  const exited = { ...session, lifecycle: "exited", exitCode: 7 };
+  tracker.observe(exited);
+  expect(tracker.visible()).toEqual([]);
+  expect(tracker.receive([machine], [session])).toEqual([]);
+  expect(tracker.accept(session)).toBeUndefined();
+});
+
+test("lifecycle observations preserve newer inventory metadata and do not cross Agent epochs", () => {
+  const tracker = new CreatedSessions();
+  const renamed = { ...session, title: "Newer name", terminalTheme: "nord" };
+  tracker.receive([machine], [renamed]);
+  tracker.observe({ ...session, lifecycle: "terminating" });
+  expect(tracker.visible()).toEqual([{ ...renamed, lifecycle: "terminating" }]);
+  const newerEpoch = { ...renamed, agentEpoch: "new-epoch" };
+  expect(tracker.receive([machine], [newerEpoch])).toEqual([newerEpoch]);
+  tracker.observe({ ...session, lifecycle: "exited", exitCode: 0 });
+  expect(tracker.visible()).toEqual([newerEpoch]);
+});
+
+test("new inventory metadata cannot reverse a same-epoch terminating or exited lifecycle", () => {
+  const tracker = new CreatedSessions();
+  tracker.receive([machine], [{ ...session, lifecycle: "terminating" }]);
+  expect(
+    tracker.receive([machine], [{ ...session, title: "Renamed" }]),
+  ).toEqual([{ ...session, title: "Renamed", lifecycle: "terminating" }]);
+  tracker.receive(
+    [machine],
+    [{ ...session, lifecycle: "exited", exitCode: 0 }],
+  );
+  expect(
+    tracker.receive([machine], [{ ...session, lifecycle: "terminating" }]),
+  ).toEqual([]);
+});

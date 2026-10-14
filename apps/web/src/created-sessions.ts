@@ -1,15 +1,45 @@
 import type { MachineInfo, SessionInfo } from "../../../packages/protocol-ts";
 
+const visible = (session: SessionInfo) =>
+  session.lifecycle === "running" || session.lifecycle === "terminating";
+
+// Metadata may change, but a stale result cannot reverse a known lifecycle in
+// the same Agent epoch. A new epoch is an independent authoritative inventory.
+function preserveLifecycle(
+  current: SessionInfo | undefined,
+  next: SessionInfo,
+): SessionInfo {
+  if (
+    current?.agentEpoch === next.agentEpoch &&
+    (["exited", "lost"].includes(current.lifecycle) ||
+      (current.lifecycle === "terminating" && next.lifecycle === "running"))
+  )
+    return {
+      ...next,
+      lifecycle: current.lifecycle,
+      exitCode: current.exitCode,
+    };
+  return next;
+}
+
 // HTTP operation results can arrive before their WebSocket inventory. Keep a
-// created session visible until the inventory acknowledges it, without letting
-// an older create result overwrite newer inventory metadata or revive an exit.
+// created session visible until inventory acknowledges it, and retain lifecycle
+// observations across both channels without replacing newer inventory metadata.
 export class CreatedSessions {
   private inventory = new Map<string, SessionInfo>();
   private pending = new Map<string, SessionInfo>();
   private availableMachines = new Set<string>();
 
   receive(machines: MachineInfo[], sessions: SessionInfo[]): SessionInfo[] {
-    this.inventory = new Map(sessions.map((session) => [session.id, session]));
+    this.inventory = new Map(
+      sessions.map((session) => [
+        session.id,
+        preserveLifecycle(
+          this.inventory.get(session.id) ?? this.pending.get(session.id),
+          session,
+        ),
+      ]),
+    );
     this.availableMachines = new Set(
       machines
         .filter((machine) => !machine.revoked)
@@ -25,17 +55,38 @@ export class CreatedSessions {
     return this.visible();
   }
 
-  accept(session: SessionInfo): SessionInfo | undefined {
+  observe(session: SessionInfo): SessionInfo | undefined {
     if (!this.availableMachines.has(session.machineId)) return undefined;
-    const current = this.inventory.get(session.id) ?? session;
-    if (current.lifecycle !== "running") return undefined;
-    if (!this.inventory.has(session.id)) this.pending.set(session.id, current);
-    return current;
+    const current =
+      this.inventory.get(session.id) ?? this.pending.get(session.id);
+    let observed = session;
+    if (current) {
+      // HTTP results must not replace current inventory names/themes, or a newer
+      // Agent epoch. Only advance lifecycle within the current epoch.
+      const lifecycle = preserveLifecycle(current, session);
+      observed =
+        current.agentEpoch === session.agentEpoch
+          ? {
+              ...current,
+              lifecycle: lifecycle.lifecycle,
+              exitCode: lifecycle.exitCode,
+            }
+          : current;
+    }
+    if (this.inventory.has(session.id))
+      this.inventory.set(session.id, observed);
+    else this.pending.set(session.id, observed);
+    return observed;
+  }
+
+  accept(session: SessionInfo): SessionInfo | undefined {
+    const observed = this.observe(session);
+    return observed && visible(observed) ? observed : undefined;
   }
 
   visible(): SessionInfo[] {
     return [...this.inventory.values(), ...this.pending.values()].filter(
-      (session) => session.lifecycle === "running",
+      visible,
     );
   }
 }

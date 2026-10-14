@@ -255,7 +255,7 @@ function App() {
           );
           const ended = new Set(
             event.payload.sessions
-              .filter((s) => s.lifecycle !== "running")
+              .filter((s) => !["running", "terminating"].includes(s.lifecycle))
               .map((s) => s.id),
           );
           setSelected((id) => (id && ended.has(id) ? null : id));
@@ -389,6 +389,7 @@ function App() {
   const close = () =>
     act(async () => {
       if (!active) return;
+      const tracker = createdSessions.current;
       const result = await api<{ operationId: string }>(
         `/sessions/${active.id}/close`,
         "POST",
@@ -396,7 +397,16 @@ function App() {
         randomId(),
       );
       setConfirmClose(false);
-      await waitOperation(result.operationId);
+      const operation = await waitOperation(result.operationId);
+      if (tracker !== createdSessions.current) return;
+      const session = operation.result?.session;
+      if (session?.id === active.id && session.machineId === active.machineId) {
+        const observed = tracker.observe(session);
+        if (!observed) return;
+        setSessions(tracker.visible());
+        if (!["running", "terminating"].includes(observed.lifecycle))
+          setSelected((id) => (id === observed.id ? null : id));
+      }
     });
 
   if (loading)
