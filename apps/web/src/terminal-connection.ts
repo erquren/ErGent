@@ -258,6 +258,14 @@ export class TerminalConnection {
             if (this.rendered) this.onHistoryLoss();
             this.applied = null;
             this.term.reset();
+            // xterm 5.x reset zeroes browser viewport row metrics until its next
+            // animation frame. A same-size resize is a no-op, so a queued native
+            // scroll can divide by zero and leave viewportY=NaN (blank screen).
+            // The empty surface can safely take one temporary row; an actual
+            // public resize synchronously restores metrics before events resume.
+            // Do not do this on replay, which must preserve existing scrollback.
+            if (this.term.cols === p.cols && this.term.rows === p.rows)
+              this.term.resize(p.cols, p.rows + 1);
             this.term.resize(p.cols, p.rows);
           }
           this.synchronized(binding);

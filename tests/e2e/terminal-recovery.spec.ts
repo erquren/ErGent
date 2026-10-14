@@ -32,6 +32,7 @@ class Surface implements TerminalSurface {
   cols = 80;
   rows = 24;
   resets = 0;
+  sizes: [number, number][] = [];
   text = "";
   writes: { bytes: Uint8Array; done: () => void }[] = [];
   reset() {
@@ -39,6 +40,7 @@ class Surface implements TerminalSurface {
     this.text = "";
   }
   resize(cols: number, rows: number) {
+    this.sizes.push([cols, rows]);
     this.cols = cols;
     this.rows = rows;
   }
@@ -642,6 +644,32 @@ test("resize pauses readiness immediately and old output cannot re-enable input"
     expect(h.writable.at(-1)).toBe(true);
     h.connection.transmit("ready");
     expect(socket.commands("terminal.input")).toHaveLength(1);
+  } finally {
+    h.connection.dispose();
+  }
+});
+
+test("same-size authoritative reset synchronously normalizes browser viewport metrics", async () => {
+  const h = harness(),
+    socket = new Socket();
+  try {
+    h.connection.connect(socket.websocket);
+    await sync(socket, true);
+    expect(h.term.sizes).toEqual([
+      [80, 25],
+      [80, 24],
+    ]);
+    snapshot(socket, "screen");
+    h.term.finish();
+    socket.close();
+    const next = new Socket();
+    h.connection.connect(next.websocket);
+    await sync(next, false, "0", "resume");
+    expect(h.term.sizes).toEqual([
+      [80, 25],
+      [80, 24],
+    ]);
+    expect(h.term.resets).toBe(1);
   } finally {
     h.connection.dispose();
   }
