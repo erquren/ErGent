@@ -11,6 +11,7 @@ async fn app(path: &std::path::Path) -> App {
         trusted_proxies: vec![],
         hub: Arc::new(Mutex::new(crate::Hub::default())),
         login_locks: Arc::new(std::array::from_fn(|_| Mutex::new(()))),
+        login_policy: crate::login_guard::Policy::default(),
     };
     sqlx::query("INSERT INTO users VALUES('owner','owner','unused')")
         .execute(&app.db)

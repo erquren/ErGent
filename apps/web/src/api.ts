@@ -1,3 +1,4 @@
+import type { SessionInfo } from "../../../packages/protocol-ts";
 import { t } from "./i18n";
 let csrfToken = "";
 export async function csrf() {
@@ -30,12 +31,15 @@ export async function api<T>(
   if (result.data?.csrfToken) csrfToken = result.data.csrfToken;
   return result.data as T;
 }
-export async function waitOperation(id: string) {
+export interface OperationResult {
+  status: string;
+  sessionId: string;
+  result?: { session?: SessionInfo | null; error?: string | null } | null;
+}
+export async function waitOperation(id: string): Promise<OperationResult> {
   for (let n = 0; n < 60; n++) {
-    const op = await api<{ status: string; result?: { error?: string } }>(
-      `/operations/${id}`,
-    );
-    if (op.status === "succeeded") return;
+    const op = await api<OperationResult>(`/operations/${id}`);
+    if (op.status === "succeeded") return op;
     if (op.status === "failed") throw new Error(op.result?.error || "操作失败");
     if (op.status === "unknown")
       throw new Error(

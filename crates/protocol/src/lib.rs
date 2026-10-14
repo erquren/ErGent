@@ -127,11 +127,19 @@ pub struct CreateTerminal {
     pub cols: u16,
     pub rows: u16,
 }
+/// Display names use Unicode scalar values (not UTF-8 bytes or grapheme clusters).
+/// Reject controls before trimming so a trailing newline cannot be normalized away.
+pub fn normalize_name(value: &str) -> Result<&str, &'static str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 120 || value.chars().any(char::is_control) {
+        return Err("名称须为 1–120 个字符，且不能包含控制字符");
+    }
+    Ok(trimmed)
+}
+
 impl CreateTerminal {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.title.trim().is_empty() || self.title.len() > 120 {
-            return Err("终端名称应为 1–120 字节");
-        }
+        normalize_name(&self.title).map_err(|_| "终端名称须为 1–120 个字符，且不能包含控制字符")?;
         if self.cwd.is_empty() || self.cwd.len() > 4096 || self.cwd.contains('\0') {
             return Err("无效工作目录");
         }
@@ -362,6 +370,34 @@ pub fn typescript() -> String {
 #[cfg(test)]
 mod tests {
     use super::frame::*;
+    #[test]
+    fn display_names_match_shared_unicode_fixtures() {
+        let cases: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("../../../tests/fixtures/names.json")).unwrap();
+        for case in cases {
+            let value = case["value"].as_str().unwrap();
+            let expected = case["expected"].as_str();
+            assert_eq!(
+                super::normalize_name(value).ok(),
+                expected,
+                "{}",
+                case["label"]
+            );
+            let config = super::CreateTerminal {
+                title: value.into(),
+                cwd: "/tmp".into(),
+                cols: 80,
+                rows: 24,
+            };
+            assert_eq!(
+                config.validate().is_ok(),
+                expected.is_some(),
+                "{}",
+                case["label"]
+            );
+        }
+    }
+
     #[test]
     fn frames_preserve_bytes_and_large_sequences() {
         let raw = [0, 0xff, 0xe4, 0xb8];

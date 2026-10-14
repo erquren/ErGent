@@ -55,6 +55,40 @@ macOS 构建最低部署目标为 11.0，尚未完成旧版系统实机验收。
 Windows 使用 MSVC，需支持 ConPTY 的现代 Windows（Windows 10 1809+ / Windows 11），可能需要匹配架构的 Visual C++ Runtime。
 当前提供可解压运行的预览包，不是安装器；未配置 Windows 签名、macOS 签名或公证。
 
-登录失败按来源 IP 累计，达到 3 次后永久拒绝新登录，统一提示账号或密码错误；成功登录不清零失败数，重启不解封。
-管理员执行 `./ergent-server --database .local/server.db login-unblock IP` 解封（Windows 使用 .exe）。
+## 登录保护与审计
+
+登录失败按规范化后的来源 IP 计数，同一出口的用户共用限制。默认从首次失败开始计算 15 分钟固定窗口，第 5 次失败触发 30 秒退避；等待后若在同一窗口继续失败，退避逐次翻倍（60、120、240……秒），单次上限为 15 分钟。
+
+- 窗口到期后旧计数失效；已经发出的退避仍等待至原截止时间，之后开启新窗口。
+- 退避期间的请求返回 HTTP 429、`LOGIN_THROTTLED` 和秒数形式的 `Retry-After`，不会增加计数或延长截止时间。退避结束前，正确密码也不能绕过限制。
+- 未触发退避的错误凭据返回 HTTP 401、`INVALID_CREDENTIALS`；成功登录签发会话时原子清零该 IP 的失败状态。
+- 状态写入数据库，重启不会重置尚未到期的窗口或退避；过期状态在后续登录时清理。
+- 同一 IP 的并发请求串行处理；SQLite 写事务也让多个进程和命令行解锁保持一致。密码校验期间持有写事务，会短暂阻塞其他数据库写入；读取和现有终端数据流不受这把写锁影响。
+
+启动时可配置以下参数；启动脚本会透传给 `run`：
+
+```sh
+./start-server.sh --login-window-seconds 900 --login-failure-threshold 5 \
+  --login-backoff-seconds 30 --login-max-backoff-seconds 900
+```
+
+所有参数必须为正数，时间参数最多 86400 秒，阈值最多 1000000；初始退避不能大于最大退避。更改参数不会缩短已经记录的退避截止时间。共用数据库的 Server 应采用相同设置。
+
+管理员在 Server 主机上解锁（Windows 使用 .exe）：
+
+```sh
+./ergent-server --database .local/server.db login-unblock 192.0.2.1 \
+  --actor on-call --reason "已确认共享出口误触发"
+```
+
+`--actor` 和 `--reason` 为必填，分别最多 120 和 1024 字节，不可为空白。操作会原子保存审计并删除该 IP 的限制；审计写入失败时不会解锁。即使该 IP 已无限制，也会留下记录。输出包含审计 ID，表 `login_guard_audit` 记录 UTC Unix 时间、规范化 IP、操作人标签、原因及清除前的失败次数/窗口起点/退避截止时间。操作人是本地主动填写的标签，不是经过独立认证的身份；数据库管理员仍可修改本地记录，重要环境请将系统日志汇入外部审计系统。没有新增管理 HTTP 接口。
+
+有 SQLite 命令行工具时可只读查询最近的审计记录：
+
+```sh
+sqlite3 -readonly .local/server.db "SELECT id,datetime(created_at,'unixepoch'),ip,action,actor,reason,previous_failures FROM login_guard_audit ORDER BY created_at DESC LIMIT 50;"
+```
+
+首次升级会将旧 `login_ip_failures` 中所有计数（包括永久封禁）记录为 `legacy_reset` 审计事件并清零。旧数据没有时间戳，不能可靠地迁移成新的时间窗口；此重置只发生一次，之后重启不会重复清零。升级前停止所有访问同一数据库的旧 Server 并备份数据，不要让新旧版本同时访问；回退旧版本请恢复升级前的备份，旧版本不会理解新的限流状态。
+
 HTTPS 代理后必须指定 `--trusted-proxy 代理对端IP` 并由该代理覆盖 `X-Real-IP` 为真实客户端 IP；否则按代理 IP 共用失败计数。

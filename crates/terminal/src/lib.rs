@@ -141,8 +141,9 @@ impl TerminalManager {
             .map(|s| s.state.lock().info.clone())
             .collect()
     }
-    pub fn create(&self, id: &str, config: CreateTerminal) -> Result<SessionInfo> {
+    pub fn create(&self, id: &str, mut config: CreateTerminal) -> Result<SessionInfo> {
         config.validate().map_err(|e| anyhow!(e))?;
+        config.title = config.title.trim().to_owned();
         let mut sessions = self.sessions.lock();
         if let Some(session) = sessions.get(id) {
             if session.config != config {

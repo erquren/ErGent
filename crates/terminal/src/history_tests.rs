@@ -35,7 +35,7 @@ fn exited_runtime_is_reclaimed_but_history_and_idempotency_survive() {
     let tmp = tempfile::tempdir().unwrap();
     let manager = TerminalManager::new("machine".into(), "epoch".into());
     let config = CreateTerminal {
-        title: "history".into(),
+        title: "  history  ".into(),
         cwd: tmp.path().to_string_lossy().into(),
         cols: 80,
         rows: 24,
@@ -55,9 +55,13 @@ fn exited_runtime_is_reclaimed_but_history_and_idempotency_survive() {
         std::thread::sleep(Duration::from_millis(10));
     }
     let info = session.state.lock().info.clone();
+    assert_eq!(info.title, "history");
     // Replayed creates remain idempotent even after the original directory disappears.
     drop(tmp);
     assert_eq!(manager.create("first", config.clone()).unwrap(), info);
+    let mut normalized = config.clone();
+    normalized.title = "history".into();
+    assert_eq!(manager.create("first", normalized).unwrap(), info);
     let mut conflicting = config;
     conflicting.title = "different".into();
     assert!(manager.create("first", conflicting).is_err());
