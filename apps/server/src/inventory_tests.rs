@@ -483,3 +483,44 @@ async fn truncated_output_marker_survives_inventory_and_storage() {
     };
     assert_eq!(sessions, vec![truncated]);
 }
+
+#[tokio::test]
+async fn stale_inventory_cannot_revive_sessions_or_erase_final_truncation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app(&tmp.path().join("db")).await;
+    for state in ["exited", "lost", "terminating"] {
+        save_session(&app, &session(state, "epoch", state))
+            .await
+            .unwrap();
+    }
+    let stale: Vec<_> = ["exited", "lost", "terminating"]
+        .into_iter()
+        .map(|id| {
+            let mut update = session(id, "epoch", "running");
+            update.output_truncated = true;
+            update
+        })
+        .collect();
+    reconcile(&app, "machine", "epoch", stale, "connection")
+        .await
+        .unwrap();
+    for state in ["exited", "lost", "terminating"] {
+        let hub = app.hub.lock().await;
+        assert_eq!(hub.sessions[state].lifecycle, state);
+        assert!(hub.sessions[state].output_truncated);
+    }
+    let stale = ["exited", "lost", "terminating"]
+        .into_iter()
+        .map(|id| session(id, "epoch", "running"))
+        .collect();
+    reconcile(&app, "machine", "epoch", stale, "connection")
+        .await
+        .unwrap();
+    let saved: String = sqlx::query_scalar("SELECT data FROM terminal_sessions WHERE id='exited'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    let saved: SessionInfo = serde_json::from_str(&saved).unwrap();
+    assert_eq!(saved.lifecycle, "exited");
+    assert!(saved.output_truncated);
+}

@@ -286,7 +286,24 @@ async fn reconcile(
             s
         })
         .collect();
-    updates.extend(sessions);
+    updates.extend(sessions.into_iter().map(|mut session| {
+        if let Some(current) = hub
+            .sessions
+            .get(&session.id)
+            .filter(|s| s.agent_epoch == session.agent_epoch)
+        {
+            let truncated = current.output_truncated || session.output_truncated;
+            // A delayed inventory cannot revive a completed or already-closing session.
+            // Final output metadata can still arrive after the first exit observation.
+            if matches!(current.lifecycle.as_str(), "exited" | "lost")
+                || (current.lifecycle == "terminating" && session.lifecycle == "running")
+            {
+                session = current.clone();
+            }
+            session.output_truncated = truncated;
+        }
+        session
+    }));
     for session in &updates {
         let data = serde_json::to_string(session).map_err(|_| ApiError::internal())?;
         sqlx::query("INSERT INTO terminal_sessions VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data WHERE machine_id=excluded.machine_id")
