@@ -38,6 +38,7 @@ import { GlassPopover } from "./GlassPopover";
 import "./glass.css";
 import { toolLabel } from "./tool-status";
 import { normalizeName, nameValidationMessage } from "./names";
+import { CreatedSessions } from "./created-sessions";
 
 function App() {
   const { preference, setPreference } = useLanguage();
@@ -174,6 +175,7 @@ function App() {
     { eventId: string; sessionId: string; title: string; status: ToolStatus }[]
   >([]);
   const wsRef = useRef<WebSocket | null>(null);
+  const createdSessions = useRef(new CreatedSessions());
   useEffect(() => {
     csrf()
       .then(() => api<{ username: string }>("/auth/me"))
@@ -182,6 +184,7 @@ function App() {
       .finally(() => setLoading(false));
   }, []);
   useEffect(() => {
+    createdSessions.current = new CreatedSessions();
     if (!user) return;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -246,11 +249,14 @@ function App() {
           receivedInventory = true;
           setMachines(event.payload.machines);
           setSessions(
-            event.payload.sessions.filter((s) => s.lifecycle === "running"),
+            createdSessions.current.receive(
+              event.payload.machines,
+              event.payload.sessions,
+            ),
           );
           const ended = new Set(
             event.payload.sessions
-              .filter((s) => s.lifecycle !== "running")
+              .filter((s) => !["running", "terminating"].includes(s.lifecycle))
               .map((s) => s.id),
           );
           setSelected((id) => (id && ended.has(id) ? null : id));
@@ -270,6 +276,7 @@ function App() {
     connect();
     return () => {
       disposed = true;
+      createdSessions.current = new CreatedSessions();
       clearTimeout(timer);
       wsRef.current?.close();
       setSocket(null);
@@ -310,6 +317,7 @@ function App() {
   };
   const create = () =>
     act(async () => {
+      const tracker = createdSessions.current;
       const result = await api<{ operationId: string; sessionId: string }>(
         `/machines/${machineId}/sessions`,
         "POST",
@@ -317,8 +325,24 @@ function App() {
         randomId(),
       );
       setModal(null);
-      await waitOperation(result.operationId);
-      setSelected(result.sessionId);
+      const operation = await waitOperation(result.operationId);
+      if (tracker !== createdSessions.current) return;
+      const session = operation.result?.session;
+      if (
+        !session ||
+        session.id !== result.sessionId ||
+        session.machineId !== machineId
+      )
+        throw new Error(t("创建结果缺少会话信息，请刷新会话列表"));
+      const created = tracker.accept(session);
+      if (created) {
+        setSessions((items) =>
+          items.some((item) => item.id === created.id)
+            ? items
+            : [...items, created],
+        );
+        setSelected(created.id);
+      }
     });
   const enroll = () =>
     act(async () => {
@@ -366,6 +390,7 @@ function App() {
   const close = () =>
     act(async () => {
       if (!active) return;
+      const tracker = createdSessions.current;
       const result = await api<{ operationId: string }>(
         `/sessions/${active.id}/close`,
         "POST",
@@ -373,7 +398,16 @@ function App() {
         randomId(),
       );
       setConfirmClose(false);
-      await waitOperation(result.operationId);
+      const operation = await waitOperation(result.operationId);
+      if (tracker !== createdSessions.current) return;
+      const session = operation.result?.session;
+      if (session?.id === active.id && session.machineId === active.machineId) {
+        const observed = tracker.observe(session);
+        if (!observed) return;
+        setSessions(tracker.visible());
+        if (!["running", "terminating"].includes(observed.lifecycle))
+          setSelected((id) => (id === observed.id ? null : id));
+      }
     });
 
   if (loading)
