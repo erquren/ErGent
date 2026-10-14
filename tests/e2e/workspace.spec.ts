@@ -886,6 +886,152 @@ test("authorization, CSRF, enrollment replay, and create idempotency", async () 
   await anon.dispose();
 });
 
+for (const exitBeforeReply of [false, true]) {
+  test(`close UI keeps acceptance separate from exit (exit first: ${exitBeforeReply})`, async ({
+    page,
+  }) => {
+    const session = {
+      id: "close-ui",
+      machineId: "close-machine",
+      agentEpoch: "close-epoch",
+      title: "Close UI probe",
+      terminalTheme: null,
+      cwd: "/tmp",
+      shell: "sh",
+      lifecycle: "running",
+      cols: 80,
+      rows: 24,
+      exitCode: null,
+      toolStatus: null,
+    };
+    let socket: import("@playwright/test").WebSocketRoute;
+    let polls = 0;
+    let inputs = 0;
+    const inventory = (lifecycle: string) =>
+      socket.send(
+        JSON.stringify({
+          type: "inventory.sync",
+          payload: {
+            machines: [
+              {
+                id: session.machineId,
+                name: "Close machine",
+                os: "linux",
+                arch: "test",
+                online: true,
+                revoked: false,
+                defaultCwd: "/tmp",
+              },
+            ],
+            sessions: [
+              {
+                ...session,
+                lifecycle,
+                exitCode: lifecycle === "exited" ? 0 : null,
+              },
+            ],
+          },
+        }),
+      );
+    await page.routeWebSocket("**/api/v1/ws/browser", (ws) => {
+      socket = ws;
+      inventory("running");
+      ws.onMessage((raw) => {
+        const command = JSON.parse(raw.toString());
+        if (command.type === "terminal.attach")
+          ws.send(
+            JSON.stringify({
+              type: "terminal.snapshot",
+              payload: {
+                sessionId: session.id,
+                seq: "0",
+                cols: 80,
+                rows: 24,
+                first: true,
+                last: true,
+                dataBase64: "Y2xvc2UgdGVzdA==",
+              },
+            }),
+          );
+        if (command.type === "terminal.lease.claim")
+          ws.send(
+            JSON.stringify({
+              type: "terminal.lease.changed",
+              payload: {
+                sessionId: session.id,
+                leaseId: "lease",
+                writable: true,
+              },
+            }),
+          );
+        if (command.type === "terminal.input") inputs++;
+      });
+    });
+    await page.route("**/api/v1/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      let data: unknown;
+      if (path.endsWith("/auth/csrf")) data = { csrfToken: "test" };
+      else if (path.endsWith("/auth/me")) data = { username: "admin" };
+      else if (path.endsWith("/close"))
+        data = {
+          operationId: "closing",
+          sessionId: session.id,
+          status: "pending",
+        };
+      else if (path.endsWith("/operations/closing")) {
+        polls++;
+        if (exitBeforeReply) {
+          inventory("exited");
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        data = {
+          status: "accepted",
+          sessionId: session.id,
+          result: {
+            session: { ...session, lifecycle: "terminating" },
+            error: null,
+          },
+        };
+      } else return route.fallback();
+      await route.fulfill({ json: { data } });
+    });
+    await page.goto(origin);
+    await page
+      .locator(".session-card")
+      .filter({ hasText: session.title })
+      .click();
+    await expect(page.getByText("已连接 · 输入在设备上执行")).toBeVisible();
+    await page.getByRole("button", { name: "结束终端", exact: true }).click();
+    await page.getByRole("button", { name: "确认结束", exact: true }).click();
+    if (!exitBeforeReply) {
+      await expect(page.locator(".page-heading .badge")).toHaveText("正在结束");
+      await expect(page.getByText("正在结束 · 等待进程退出")).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "结束终端", exact: true }),
+      ).toBeDisabled();
+      await expect(
+        page.getByRole("button", { name: "Ctrl+C", exact: true }),
+      ).toBeDisabled();
+      await page.locator(".xterm-helper-textarea").focus();
+      await page.keyboard.type("must not be written");
+      expect(inputs).toBe(0);
+      inventory("terminating");
+      await expect(page.locator(".page-heading .badge")).toHaveText("正在结束");
+      inventory("exited");
+    }
+    await expect(page.locator(".terminal-page")).toHaveCount(0);
+    await expect(
+      page.locator(".session-card").filter({ hasText: session.title }),
+    ).toHaveCount(0);
+    await page.waitForTimeout(600);
+    expect(polls).toBe(1);
+    await expect(
+      page.locator(".session-card").filter({ hasText: session.title }),
+    ).toHaveCount(0);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+}
+
 test("cross-user isolation, agent restart, close, and device revocation", async () => {
   const otherAdmin = spawnSync(
     serverBin,
@@ -981,14 +1127,36 @@ test("cross-user isolation, agent restart, close, and device revocation", async 
         ).data.status,
     )
     .toBe("succeeded");
-  expect(
-    (
-      await api.post(`/api/v1/sessions/${created.sessionId}/close`, {
-        data: {},
-        headers: { ...headers(), "Idempotency-Key": randomUUID() },
-      })
-    ).status(),
-  ).toBe(202);
+  const closeKey = randomUUID();
+  const closing = await api.post(
+    `/api/v1/sessions/${created.sessionId}/close`,
+    {
+      data: {},
+      headers: { ...headers(), "Idempotency-Key": closeKey },
+    },
+  );
+  expect(closing.status()).toBe(202);
+  const closeOperation = (await closing.json()).data;
+  const repeatedClose = await api.post(
+    `/api/v1/sessions/${created.sessionId}/close`,
+    {
+      data: {},
+      headers: { ...headers(), "Idempotency-Key": closeKey },
+    },
+  );
+  expect((await repeatedClose.json()).data.operationId).toBe(
+    closeOperation.operationId,
+  );
+  await expect
+    .poll(
+      async () =>
+        (
+          await (
+            await api.get(`/api/v1/operations/${closeOperation.operationId}`)
+          ).json()
+        ).data.status,
+    )
+    .toBe("accepted");
   await expect
     .poll(
       async () =>
@@ -998,6 +1166,30 @@ test("cross-user isolation, agent restart, close, and device revocation", async 
           .lifecycle,
     )
     .toBe("exited");
+  await stop(agent);
+  await expect
+    .poll(
+      async () =>
+        (await (await api.get("/api/v1/machines")).json()).data.items.find(
+          (m: { id: string }) => m.id === machineId,
+        ).online,
+    )
+    .toBe(false);
+  const alreadyExited = await api.post(
+    `/api/v1/sessions/${created.sessionId}/close`,
+    {
+      data: {},
+      headers: { ...headers(), "Idempotency-Key": randomUUID() },
+    },
+  );
+  expect(alreadyExited.status()).toBe(202);
+  const noop = (await alreadyExited.json()).data;
+  expect(noop.status).toBe("accepted");
+  const confirmed = (
+    await (await api.get(`/api/v1/operations/${noop.operationId}`)).json()
+  ).data;
+  expect(confirmed.status).toBe("accepted");
+  expect(confirmed.result.session.lifecycle).toBe("exited");
   expect(
     (
       await api.post(`/api/v1/machines/${machineId}/revoke`, {

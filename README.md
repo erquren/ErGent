@@ -45,6 +45,14 @@ python3 scripts/dev.py
 
 在 Codex `/hooks` 中审阅并信任 hooks 后，网页可显示处理中、等待确认、完成和退出等状态。目前仅提供 Codex 状态适配器。
 
+## 结束终端的状态
+
+- `POST /api/v1/sessions/{id}/close` 返回 HTTP 202 和操作 ID，只表示请求已排队。使用同一 `Idempotency-Key` 重试会返回同一操作，不会再次提交。
+- 查询 `/api/v1/operations/{id}`：`pending` 表示尚未确认；`accepted` 表示 Agent 已接受终止信号，或进程已经退出。接受关闭后会话为 `terminating`，网页显示“正在结束”，禁止继续输入或重复结束。
+- `accepted` 不代表进程已退出。只有 Agent 的进程等待线程确认退出后，会话才变成 `exited` 并带上退出码；会话列表/推送是后续状态来源。即使退出事件先于关闭回复到达，也不会被旧回复改回运行中。
+- 发信号失败时操作为 `failed`，会话保持原状态；连接中断、超时或旧 Agent 只回复 `running` 时可能为 `unknown`，应检查会话状态。Agent 重启后无法确认的未退出会话，或进程等待失败的会话为 `lost`。Server、Agent 和网页应一起升级。
+- 对 `terminating` 或 `exited` 会话再次结束是幂等操作；仍在结束的进程继续计入活动会话上限。关闭请求不会等待进程退出，也不会阻塞 Agent 的连接循环。
+
 ## 安全与使用边界
 
 - 终端以 Agent 当前用户的权限运行。不自动安装或登录 AI CLI。

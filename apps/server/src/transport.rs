@@ -149,14 +149,7 @@ async fn agent_socket(app: App, mut socket: WebSocket, machine: String, owner: S
                         }
                         AgentEvent::Operation { operation_id, session, error } => {
                             if epoch.is_none() { break; }
-                            let row=sqlx::query("SELECT session_id FROM operations WHERE id=? AND machine_id=?").bind(&operation_id).bind(&machine).fetch_optional(&app.db).await;
-                            let Ok(Some(row))=row else { continue };
-                            if let Some(ref s)=session {
-                                if s.id!=row.get::<String,_>("session_id") || s.machine_id!=machine || Some(&s.agent_epoch)!=epoch.as_ref() { break; }
-                                if save_session(&app,s).await.is_err() { break; }
-                            }
-                            let status=if error.is_some(){"failed"}else{"succeeded"};
-                            let _=sqlx::query("UPDATE operations SET status=?,result=? WHERE id=?").bind(status).bind(json!({"session":session,"error":error}).to_string()).bind(operation_id).execute(&app.db).await;
+                            if record_operation(&app,&machine,epoch.as_deref().unwrap(),&operation_id,session,error).await.is_err() { break; }
                             app.notify_inventory().await;
                         }
                         AgentEvent::Viewer { viewer_id, event } => {
@@ -193,16 +186,71 @@ async fn agent_socket(app: App, mut socket: WebSocket, machine: String, owner: S
     .await;
     app.notify_inventory().await;
 }
-async fn save_session(app: &App, session: &SessionInfo) -> Result<(), ApiError> {
+async fn record_operation(
+    app: &App,
+    machine: &str,
+    epoch: &str,
+    operation_id: &str,
+    mut session: Option<SessionInfo>,
+    error: Option<String>,
+) -> Result<(), ApiError> {
+    let row = sqlx::query("SELECT session_id,kind FROM operations WHERE id=? AND machine_id=?")
+        .bind(operation_id)
+        .bind(machine)
+        .fetch_optional(&app.db)
+        .await?;
+    let Some(row) = row else {
+        return Ok(());
+    };
+    if let Some(s) = session.take() {
+        if s.id != row.get::<String, _>("session_id")
+            || s.machine_id != machine
+            || s.agent_epoch != epoch
+        {
+            return Err(ApiError::not_found());
+        }
+        session = Some(save_session(app, &s).await?);
+    }
+    let status = if error.is_some() {
+        "failed"
+    } else if row.get::<String, _>("kind") == "close" {
+        if session
+            .as_ref()
+            .is_some_and(|s| matches!(s.lifecycle.as_str(), "terminating" | "exited"))
+        {
+            "accepted"
+        } else {
+            // An older Agent may reply with running. It has not confirmed the new
+            // close contract, so do not report either acceptance or process exit.
+            "unknown"
+        }
+    } else {
+        "succeeded"
+    };
+    sqlx::query("UPDATE operations SET status=?,result=? WHERE id=?")
+        .bind(status)
+        .bind(json!({"session":session,"error":error}).to_string())
+        .bind(operation_id)
+        .execute(&app.db)
+        .await?;
+    Ok(())
+}
+async fn save_session(app: &App, session: &SessionInfo) -> Result<SessionInfo, ApiError> {
     // Existing IDs may never move to another device.
     {
         let hub = app.hub.lock().await;
-        if hub
-            .sessions
-            .get(&session.id)
-            .is_some_and(|s| s.machine_id != session.machine_id)
-        {
-            return Err(ApiError::not_found());
+        if let Some(current) = hub.sessions.get(&session.id) {
+            if current.machine_id != session.machine_id {
+                return Err(ApiError::not_found());
+            }
+            // Close acknowledgements and the wait thread travel independently.
+            // A late acceptance (or older running update) cannot resurrect a process.
+            if current.agent_epoch == session.agent_epoch
+                && (matches!(current.lifecycle.as_str(), "exited" | "lost")
+                    || (current.lifecycle == "terminating" && session.lifecycle == "running"))
+            {
+                return Ok(current.clone());
+            }
         }
     }
     let data = serde_json::to_string(session).map_err(|_| ApiError::internal())?;
@@ -212,7 +260,7 @@ async fn save_session(app: &App, session: &SessionInfo) -> Result<(), ApiError> 
         .await
         .sessions
         .insert(session.id.clone(), session.clone());
-    Ok(())
+    Ok(session.clone())
 }
 async fn reconcile(
     app: &App,
@@ -235,7 +283,7 @@ async fn reconcile(
         .values()
         .filter(|s| {
             s.machine_id == machine
-                && s.lifecycle == "running"
+                && matches!(s.lifecycle.as_str(), "running" | "terminating")
                 && (s.agent_epoch != epoch || !sessions.iter().any(|n| n.id == s.id))
         })
         .cloned()
@@ -381,3 +429,7 @@ async fn route_browser(
     })?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "close_tests.rs"]
+mod close_tests;

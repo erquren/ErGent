@@ -16,6 +16,7 @@ pub struct SessionInfo {
     pub terminal_theme: Option<String>,
     pub cwd: String,
     pub shell: String,
+    // running, terminating (close accepted), exited (child wait completed), or lost.
     pub lifecycle: String,
     pub cols: u16,
     pub rows: u16,
@@ -266,6 +267,7 @@ pub enum AgentCommand {
         session_id: String,
         config: CreateTerminal,
     },
+    /// Requests termination; the Operation response confirms acceptance, not exit.
     Close {
         operation_id: String,
         session_id: String,

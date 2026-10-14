@@ -245,11 +245,13 @@ function App() {
           receivedInventory = true;
           setMachines(event.payload.machines);
           setSessions(
-            event.payload.sessions.filter((s) => s.lifecycle === "running"),
+            event.payload.sessions.filter((s) =>
+              ["running", "terminating"].includes(s.lifecycle),
+            ),
           );
           const ended = new Set(
             event.payload.sessions
-              .filter((s) => s.lifecycle !== "running")
+              .filter((s) => !["running", "terminating"].includes(s.lifecycle))
               .map((s) => s.id),
           );
           setSelected((id) => (id && ended.has(id) ? null : id));
@@ -372,7 +374,30 @@ function App() {
         randomId(),
       );
       setConfirmClose(false);
-      await waitOperation(result.operationId);
+      const operation = await waitOperation(result.operationId);
+      const session = operation.result?.session;
+      if (session?.id === active.id && session.machineId === active.machineId) {
+        if (session.lifecycle === "exited") {
+          setSessions((items) =>
+            items.filter((item) => item.id !== session.id),
+          );
+          setSelected((id) => (id === session.id ? null : id));
+          return;
+        }
+        // Inventory may already have observed exit and removed this terminal.
+        // Never reinsert it or replace a newer lifecycle with an older response.
+        setSessions((items) =>
+          items.map((item) =>
+            item.id === session.id && item.lifecycle === "running"
+              ? {
+                  ...item,
+                  lifecycle: session.lifecycle,
+                  exitCode: session.exitCode,
+                }
+              : item,
+          ),
+        );
+      }
     });
 
   if (loading)
@@ -672,7 +697,11 @@ function App() {
                     {active.title}
                   </span>
                   <span className="badge">
-                    {!machine?.online ? t("OFFLINE") : t("运行中")}
+                    {!machine?.online
+                      ? t("OFFLINE")
+                      : active.lifecycle === "terminating"
+                        ? t("正在结束")
+                        : t("运行中")}
                   </span>
                 </h1>
                 <p>

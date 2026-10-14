@@ -39,6 +39,7 @@ struct Session {
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    close_lock: Mutex<()>,
     #[cfg(unix)]
     pid: Option<u32>,
 }
@@ -48,8 +49,10 @@ impl Session {
         if let Some(pid) = self.pid {
             // Only kill the dedicated PTY process group, never our own or an unrelated group.
             unsafe {
-                if libc::getpgid(pid as i32) == pid as i32 {
-                    libc::killpg(pid as i32, libc::SIGKILL);
+                if libc::getpgid(pid as i32) == pid as i32
+                    && libc::killpg(pid as i32, libc::SIGKILL) == 0
+                {
+                    return Ok(());
                 }
             }
         }
@@ -145,7 +148,7 @@ impl TerminalManager {
         if sessions.len() >= 1000
             || sessions
                 .values()
-                .filter(|s| s.state.lock().info.lifecycle == "running")
+                .filter(|s| s.state.lock().info.lifecycle != "exited")
                 .count()
                 >= 20
         {
@@ -209,6 +212,7 @@ impl TerminalManager {
             writer: Mutex::new(writer),
             master: Mutex::new(pair.master),
             killer: Mutex::new(killer),
+            close_lock: Mutex::new(()),
             #[cfg(unix)]
             pid,
         });
@@ -243,37 +247,19 @@ impl TerminalManager {
         });
         let events = self.events.clone();
         std::thread::spawn(move || {
-            let exit = child.wait();
-            let mut s = state.lock();
-            s.info.lifecycle = "exited".into();
-            s.info.exit_code = exit.ok().map(|v| v.exit_code());
-            s.lease = None;
-            for viewer in &s.viewers {
-                send(
-                    &events,
-                    viewer,
-                    Event::Lease {
-                        session_id: s.info.id.clone(),
-                        lease_id: None,
-                        writable: false,
-                    },
-                );
-            }
-            let _ = events.send(AgentEvent::Session {
-                session: s.info.clone(),
-            });
+            let exit = child.wait().map(|status| status.exit_code());
+            record_exit(&state, &events, exit);
         });
         Ok(info)
     }
     pub fn close(&self, id: &str) -> Result<SessionInfo> {
         let session = self.get(id)?;
-        if session.state.lock().info.lifecycle == "running" {
-            session.kill()?;
-        }
-        // The wait thread is authoritative about exit. Caller may see running until it finishes.
-        let info = session.state.lock().info.clone();
-        Ok(info)
+        // Serialize repeated requests, but never keep the state lock while signaling.
+        // The wait thread must be free to publish an exit before the signal returns.
+        let _close = session.close_lock.lock();
+        request_close(&session.state, &self.events, || session.kill())
     }
+
     fn get(&self, id: &str) -> Result<Arc<Session>> {
         self.sessions
             .lock()
@@ -459,10 +445,68 @@ impl TerminalManager {
 impl Drop for TerminalManager {
     fn drop(&mut self) {
         for session in self.sessions.lock().values() {
-            if session.state.lock().info.lifecycle == "running" {
+            if session.state.lock().info.lifecycle != "exited" {
                 let _ = session.kill();
             }
         }
+    }
+}
+fn record_exit(
+    state: &Mutex<State>,
+    events: &broadcast::Sender<AgentEvent>,
+    result: std::io::Result<u32>,
+) {
+    let mut s = state.lock();
+    // A failed wait cannot prove that the process exited.
+    s.info.lifecycle = if result.is_ok() { "exited" } else { "lost" }.into();
+    s.info.exit_code = result.ok();
+    revoke_lease(&mut s, events);
+    let _ = events.send(AgentEvent::Session {
+        session: s.info.clone(),
+    });
+}
+
+// The caller serializes close requests. A successful signal is acceptance, not exit.
+fn request_close(
+    state: &Mutex<State>,
+    events: &broadcast::Sender<AgentEvent>,
+    kill: impl FnOnce() -> Result<()>,
+) -> Result<SessionInfo> {
+    {
+        let s = state.lock();
+        if matches!(s.info.lifecycle.as_str(), "terminating" | "exited") {
+            return Ok(s.info.clone());
+        }
+        if s.info.lifecycle != "running" {
+            bail!("无法确认终端进程状态");
+        }
+    }
+    let result = kill();
+    let mut s = state.lock();
+    if s.info.lifecycle != "running" {
+        // The wait result wins, including natural exit or loss of process status.
+        return Ok(s.info.clone());
+    }
+    result?;
+    s.info.lifecycle = "terminating".into();
+    revoke_lease(&mut s, events);
+    let _ = events.send(AgentEvent::Session {
+        session: s.info.clone(),
+    });
+    Ok(s.info.clone())
+}
+fn revoke_lease(s: &mut State, events: &broadcast::Sender<AgentEvent>) {
+    s.lease = None;
+    for viewer in &s.viewers {
+        send(
+            events,
+            viewer,
+            Event::Lease {
+                session_id: s.info.id.clone(),
+                lease_id: None,
+                writable: false,
+            },
+        );
     }
 }
 fn send(events: &broadcast::Sender<AgentEvent>, viewer: &str, event: Event) {
@@ -507,6 +551,169 @@ fn default_shell() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn running_state() -> Mutex<State> {
+        Mutex::new(State {
+            info: SessionInfo {
+                id: "session".into(),
+                machine_id: "machine".into(),
+                agent_epoch: "epoch".into(),
+                title: "Close test".into(),
+                terminal_theme: None,
+                cwd: "/".into(),
+                shell: "sh".into(),
+                lifecycle: "running".into(),
+                cols: 80,
+                rows: 24,
+                exit_code: None,
+                tool_status: None,
+            },
+            parser: vt100::Parser::new(24, 80, 0),
+            seq: 0,
+            viewers: HashSet::from(["viewer".into()]),
+            lease: Some(Lease {
+                viewer: "viewer".into(),
+                id: "lease".into(),
+                expires: Instant::now() + Duration::from_secs(30),
+            }),
+            tool_events: VecDeque::new(),
+            tool_turns: VecDeque::new(),
+            inputs: VecDeque::new(),
+        })
+    }
+
+    #[test]
+    fn accepted_close_is_terminating_and_repeated_close_is_a_noop() {
+        let state = running_state();
+        let (events, mut receiver) = broadcast::channel(16);
+        let accepted = request_close(&state, &events, || Ok(())).unwrap();
+        assert_eq!(accepted.lifecycle, "terminating");
+        assert_eq!(accepted.exit_code, None);
+        assert!(state.lock().lease.is_none());
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            AgentEvent::Viewer {
+                event: Event::Lease {
+                    writable: false,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert!(
+            matches!(receiver.try_recv().unwrap(), AgentEvent::Session { session } if session.lifecycle == "terminating")
+        );
+        assert_eq!(
+            request_close(&state, &events, || panic!("must not signal twice")).unwrap(),
+            accepted
+        );
+        assert!(receiver.try_recv().is_err());
+        assert!(check_lease(&state.lock(), "viewer", "lease").is_err());
+    }
+
+    #[test]
+    fn failed_signal_leaves_running_and_can_be_retried() {
+        let state = running_state();
+        let (events, mut receiver) = broadcast::channel(16);
+        assert!(request_close(&state, &events, || bail!("permission denied")).is_err());
+        assert_eq!(state.lock().info.lifecycle, "running");
+        assert!(state.lock().lease.is_some());
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(
+            request_close(&state, &events, || Ok(())).unwrap().lifecycle,
+            "terminating"
+        );
+    }
+
+    #[test]
+    fn authoritative_exit_wins_before_or_during_signal() {
+        for signal_fails in [false, true] {
+            let state = running_state();
+            let (events, mut receiver) = broadcast::channel(16);
+            let result = request_close(&state, &events, || {
+                // Simulate wait completing while the platform signal is in flight.
+                let mut s = state.lock();
+                s.info.lifecycle = "exited".into();
+                s.info.exit_code = Some(7);
+                if signal_fails {
+                    bail!("no such process");
+                }
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(result.lifecycle, "exited");
+            assert_eq!(result.exit_code, Some(7));
+            assert!(
+                receiver.try_recv().is_err(),
+                "must not publish a stale terminating event"
+            );
+            assert_eq!(
+                request_close(&state, &events, || panic!("already exited")).unwrap(),
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn failed_wait_never_claims_exit_or_gets_overwritten_by_acceptance() {
+        let state = running_state();
+        let (events, mut receiver) = broadcast::channel(16);
+        let result = request_close(&state, &events, || {
+            record_exit(&state, &events, Err(std::io::Error::other("wait failed")));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(result.lifecycle, "lost");
+        assert_eq!(result.exit_code, None);
+        while let Ok(event) = receiver.try_recv() {
+            if let AgentEvent::Session { session } = event {
+                assert_eq!(session.lifecycle, "lost");
+            }
+        }
+        assert!(state.lock().lease.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn close_real_process_returns_acceptance_then_wait_confirms_exit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = TerminalManager::new("machine".into(), "epoch".into());
+        let mut events = manager.events();
+        manager
+            .create(
+                "close",
+                CreateTerminal {
+                    title: "close".into(),
+                    cwd: tmp.path().to_string_lossy().into(),
+                    cols: 80,
+                    rows: 24,
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            manager.close("close").unwrap().lifecycle.as_str(),
+            "terminating" | "exited"
+        ));
+        assert!(matches!(
+            manager.close("close").unwrap().lifecycle.as_str(),
+            "terminating" | "exited"
+        ));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok(AgentEvent::Session { session }) = events.try_recv() {
+                if session.lifecycle == "exited" {
+                    break;
+                }
+                assert_eq!(session.lifecycle, "terminating");
+            }
+            assert!(
+                Instant::now() < deadline,
+                "wait must publish authoritative exit"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(manager.close("close").unwrap().lifecycle, "exited");
+    }
+
     #[test]
     fn screen_recovers_unicode_and_alternate_screen() {
         let mut source = vt100::Parser::new(24, 80, 100);

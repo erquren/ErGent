@@ -126,6 +126,8 @@ export const english: Record<string, string> = {
   已中断: "Interrupted",
   进程异常退出: "Process failed",
   已退出: "Exited",
+  正在结束: "Terminating",
+  "正在结束 · 等待进程退出": "Terminating · Waiting for the process to exit",
   运行中: "Running",
   离线: "Offline",
   在线: "Online",
