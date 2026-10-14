@@ -47,6 +47,7 @@ export function TerminalView({
     if (!container.current) return;
     const term = new Terminal({
       cursorBlink: true,
+      disableStdin: true,
       fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
       fontSize: 13,
       lineHeight: 1.35,
@@ -57,6 +58,18 @@ export function TerminalView({
     term.loadAddon(fit);
     term.open(container.current);
     terminal.current = term;
+    const inputWritable = (value: boolean) => {
+      // Match the renderer's native input state to the transport gate. During
+      // recovery/read-only leases, keystrokes must not appear to be accepted or
+      // queue up for later replay. Keep focus so mobile recovery need not reopen
+      // the keyboard, while exposing the boundary to assistive technology.
+      term.options.disableStdin = !value;
+      if (term.textarea) {
+        term.textarea.readOnly = !value;
+        term.textarea.setAttribute("aria-readonly", String(!value));
+      }
+    };
+    inputWritable(false);
     fit.fit();
     let canWrite = false;
     const resize = () => {
@@ -73,6 +86,7 @@ export function TerminalView({
       setNotice,
       (value) => {
         canWrite = value;
+        inputWritable(value);
         setWritable(value);
         if (!value) setControl(false);
       },
