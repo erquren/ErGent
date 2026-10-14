@@ -298,14 +298,13 @@ pub async fn create(
     State(app): State<App>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(mut config): Json<CreateTerminal>,
+    Json(config): Json<CreateTerminal>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let identity = auth::identity(&app, &headers, true).await?;
     app.owned_machine(&identity.user, &id).await?;
     config
         .validate()
         .map_err(|e| ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "INVALID_ARGUMENT", e))?;
-    config.title = config.title.trim().to_owned();
     start_operation(
         &app,
         &headers,
@@ -365,6 +364,12 @@ async fn start_operation(
             )
         })?;
     let request_hash = hash(&json!([machine, session, config]).to_string());
+    // Hash the original request for compatibility with existing idempotency keys.
+    // Only the command sent to the Agent is normalized.
+    let config = config.map(|mut config| {
+        config.title = config.title.trim().to_owned();
+        config
+    });
     let id = Uuid::new_v4().to_string();
     let session_id = session.unwrap_or_else(|| Uuid::new_v4().to_string());
     let mut tx = app.db.begin().await?;
