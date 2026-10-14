@@ -333,7 +333,11 @@ test("mobile layout, terminal shortcuts and compact viewport", async ({
     await page.getByRole("button", { name: /Mobile terminal/ }).tap();
     await expect(page.locator(".sidebar")).toBeHidden();
     await expect(
-      page.getByRole("button", { name: "Ctrl+C", exact: true }),
+      page.getByRole("button", {
+        name: "Ctrl+C",
+        exact: true,
+        includeHidden: true,
+      }),
     ).toBeEnabled();
     await page.getByRole("button", { name: "Ctrl+C", exact: true }).tap();
     await page.getByRole("button", { name: "Ctrl", exact: true }).tap();
@@ -1010,7 +1014,11 @@ for (const exitBeforeReply of [false, true]) {
         page.getByRole("button", { name: "结束终端", exact: true }),
       ).toBeDisabled();
       await expect(
-        page.getByRole("button", { name: "Ctrl+C", exact: true }),
+        page.getByRole("button", {
+          name: "Ctrl+C",
+          exact: true,
+          includeHidden: true,
+        }),
       ).toBeDisabled();
       await page.locator(".xterm-helper-textarea").focus();
       await page.keyboard.type("must not be written");
@@ -1078,6 +1086,25 @@ test("cross-user isolation, agent restart, close, and device revocation", async 
     },
   });
   expect(badOrigin.status()).toBe(403);
+  // This flow must also run by itself or after a Playwright worker restart.
+  const restartProbe = (
+    await (
+      await api.post(`/api/v1/machines/${machineId}/sessions`, {
+        headers: { ...headers(), "Idempotency-Key": randomUUID() },
+        data: { title: "Restart probe", cwd: folder, cols: 80, rows: 24 },
+      })
+    ).json()
+  ).data;
+  await expect
+    .poll(
+      async () =>
+        (
+          await (
+            await api.get(`/api/v1/operations/${restartProbe.operationId}`)
+          ).json()
+        ).data.status,
+    )
+    .toBe("succeeded");
   const old = (
     await (await api.get(`/api/v1/machines/${machineId}/sessions`)).json()
   ).data.items;
