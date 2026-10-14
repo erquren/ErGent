@@ -153,6 +153,8 @@ export const english: Record<string, string> = {
   需要登录: "Please sign in",
   资源不存在: "Resource not found",
   内部错误: "Internal server error",
+  "名称须为 1–120 个字符，且不能包含控制字符":
+    "Names must contain 1–120 Unicode characters and no control characters",
   "设备名须为 1–120 个字符，且不能包含控制字符":
     "Device names must be 1–120 characters without control characters.",
   "终端名称须为 1–120 个字符，且不能包含控制字符":

@@ -1,0 +1,87 @@
+[
+  {
+    "label": "ascii-120",
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+    "label": "ascii-121",
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expected": null
+  },
+  {
+    "label": "chinese-120",
+    "value": "中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中",
+    "expected": "中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中"
+  },
+  {
+    "label": "chinese-121",
+    "value": "中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中",
+    "expected": null
+  },
+  {
+    "label": "emoji-120",
+    "value": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+    "expected": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+  },
+  {
+    "label": "emoji-121",
+    "value": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+    "expected": null
+  },
+  {
+    "label": "unicode-whitespace",
+    "value": " 　开发机  ",
+    "expected": "开发机"
+  },
+  {
+    "label": "empty",
+    "value": "",
+    "expected": null
+  },
+  {
+    "label": "blank",
+    "value": " 　 ",
+    "expected": null
+  },
+  {
+    "label": "leading-newline",
+    "value": "\nname",
+    "expected": null
+  },
+  {
+    "label": "trailing-tab",
+    "value": "name\t",
+    "expected": null
+  },
+  {
+    "label": "nul",
+    "value": "a\u0000b",
+    "expected": null
+  },
+  {
+    "label": "escape",
+    "value": "a\u001bb",
+    "expected": null
+  },
+  {
+    "label": "c1",
+    "value": "ab",
+    "expected": null
+  },
+  {
+    "label": "combining-120-scalars",
+    "value": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+    "expected": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+  },
+  {
+    "label": "combining-122-scalars",
+    "value": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+    "expected": null
+  },
+  {
+    "label": "bom-is-not-white-space",
+    "value": "﻿name﻿",
+    "expected": "﻿name﻿"
+  }
+]

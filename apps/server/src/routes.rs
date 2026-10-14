@@ -8,7 +8,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
-use ergent_protocol::{CreateTerminal, Event, MachineInfo};
+use ergent_protocol::{normalize_name, CreateTerminal, Event, MachineInfo};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -100,14 +100,13 @@ pub async fn rename_machine(
     Json(body): Json<RenameMachine>,
 ) -> Reply {
     let identity = auth::identity(&app, &headers, true).await?;
-    let name = body.name.trim();
-    if name.is_empty() || name.chars().count() > 120 || name.chars().any(char::is_control) {
-        return Err(ApiError::new(
+    let name = normalize_name(&body.name).map_err(|_| {
+        ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "INVALID_ARGUMENT",
             "设备名须为 1–120 个字符，且不能包含控制字符",
-        ));
-    }
+        )
+    })?;
     let result = sqlx::query("UPDATE machines SET name=? WHERE id=? AND owner_id=? AND revoked=0")
         .bind(name)
         .bind(&id)
@@ -155,16 +154,18 @@ pub async fn update_session(
         .ok_or_else(ApiError::not_found)?;
     app.owned_machine(&identity.user, &session.machine_id)
         .await?;
-    let title = body.title.as_deref().map(str::trim);
-    if title
-        .is_some_and(|t| t.is_empty() || t.chars().count() > 120 || t.chars().any(char::is_control))
-    {
-        return Err(ApiError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "INVALID_ARGUMENT",
-            "终端名称须为 1–120 个字符，且不能包含控制字符",
-        ));
-    }
+    let title = body
+        .title
+        .as_deref()
+        .map(normalize_name)
+        .transpose()
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "INVALID_ARGUMENT",
+                "终端名称须为 1–120 个字符，且不能包含控制字符",
+            )
+        })?;
     let theme = body.terminal_theme.as_deref();
     if theme
         .is_some_and(|t| !["auto", "dark", "light", "dracula", "nord", "solarized"].contains(&t))
@@ -221,12 +222,14 @@ pub struct Enroll {
     arch: String,
 }
 pub async fn enroll(State(app): State<App>, Json(body): Json<Enroll>) -> Reply {
-    if body.name.is_empty()
-        || body.name.len() > 120
-        || body.os.len() > 32
-        || body.arch.len() > 32
-        || body.enrollment_token.len() > 128
-    {
+    let name = normalize_name(&body.name).map_err(|_| {
+        ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "INVALID_ARGUMENT",
+            "设备名须为 1–120 个字符，且不能包含控制字符",
+        )
+    })?;
+    if body.os.len() > 32 || body.arch.len() > 32 || body.enrollment_token.len() > 128 {
         return Err(ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "INVALID_ARGUMENT",
@@ -255,7 +258,7 @@ pub async fn enroll(State(app): State<App>, Json(body): Json<Enroll>) -> Reply {
     )
     .bind(&id)
     .bind(owner)
-    .bind(body.name)
+    .bind(name)
     .bind(body.os)
     .bind(body.arch)
     .bind(hash(&token))
@@ -361,6 +364,12 @@ async fn start_operation(
             )
         })?;
     let request_hash = hash(&json!([machine, session, config]).to_string());
+    // Hash the original request for compatibility with existing idempotency keys.
+    // Only the command sent to the Agent is normalized.
+    let config = config.map(|mut config| {
+        config.title = config.title.trim().to_owned();
+        config
+    });
     let id = Uuid::new_v4().to_string();
     let session_id = session.unwrap_or_else(|| Uuid::new_v4().to_string());
     let mut tx = app.db.begin().await?;
