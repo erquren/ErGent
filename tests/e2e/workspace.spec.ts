@@ -209,6 +209,78 @@ test("real terminals, card switching, browser refresh, server restart, and write
   expect(errors).toEqual([]);
 });
 
+test("create selects its result before delayed inventory arrives", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    locale: "zh-CN",
+    storageState: await api.storageState(),
+  });
+  const page = await context.newPage();
+  let holdInventory = false;
+  let initialInventory: string | Buffer | undefined;
+  const held: (string | Buffer)[] = [];
+  let deliver: ((message: string | Buffer) => void) | undefined;
+  await page.routeWebSocket("**/api/v1/ws/browser", (socket) => {
+    const upstream = socket.connectToServer();
+    deliver = (message) => socket.send(message);
+    upstream.onMessage((message) => {
+      if (JSON.parse(message.toString()).type === "inventory.sync") {
+        initialInventory ??= message;
+        if (holdInventory) {
+          held.push(message);
+          return;
+        }
+      }
+      socket.send(message);
+    });
+  });
+  let sessionId: string | undefined;
+  try {
+    await page.goto(origin);
+    await expect(
+      page.getByRole("button", { name: "在 Test Mac 新建终端" }),
+    ).toBeEnabled();
+    holdInventory = true;
+    await page.getByRole("button", { name: "在 Test Mac 新建终端" }).click();
+    await page.getByLabel("终端名称").fill("Inventory race terminal");
+    const created = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith(`/machines/${machineId}/sessions`),
+    );
+    await page.getByRole("button", { name: "创建并连接" }).click();
+    sessionId = (await (await created).json()).data.sessionId;
+    await expect(
+      page.getByRole("heading", { name: /Inventory race terminal/ }),
+    ).toBeVisible();
+    await expect(page.getByText("已连接 · 输入在设备上执行")).toBeVisible();
+    expect(initialInventory).toBeDefined();
+    deliver!(initialInventory!); // An older inventory must not erase the created card.
+    await expect(
+      page.getByRole("heading", { name: /Inventory race terminal/ }),
+    ).toBeVisible();
+    await expect.poll(() => held.length).toBeGreaterThan(0);
+    holdInventory = false;
+    for (const message of held) deliver!(message);
+    await expect(
+      page
+        .locator(".session-card")
+        .filter({ hasText: "Inventory race terminal" }),
+    ).toHaveCount(1);
+    await page.locator(".xterm-helper-textarea").focus();
+    await page.keyboard.type("printf 'CREATE_%s\\n' 'RACE_OK'\n");
+    await expect(page.locator(".xterm-rows")).toContainText("CREATE_RACE_OK");
+  } finally {
+    await context.close();
+    if (sessionId)
+      await api.post(`/api/v1/sessions/${sessionId}/close`, {
+        headers: { ...headers(), "Idempotency-Key": randomUUID() },
+        data: {},
+      });
+  }
+});
+
 for (const mobile of [false, true]) {
   test(`terminal bottom row stays visible at adjacent ${mobile ? "mobile" : "desktop"} heights`, async ({
     browser,
