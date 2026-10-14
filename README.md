@@ -4,7 +4,7 @@
 
 # Ergent
 
-**版本：v1.0.0**
+**版本：v1.1.0**
 
 浏览器里的个人开发工作台：Agent 主动连接 Server，在网页中按设备管理真实 Shell 终端。
 
@@ -65,6 +65,10 @@ python3 scripts/dev.py
 
 历史会话元数据长期保留；已退出终端释放 PTY 和解析器资源，不占用 20 个并发终端名额。Hello 与会话列表按 64KB 消息上限分块同步，完整接收后才替换列表。此版本使用 `ergent.preview.v3`，Server、Agent 和网页需一起升级；旧协议明确拒绝连接，不截断历史列表。详见 [历史保留与同步协议](INVENTORY_PROTOCOL.md)。
 
+### 升级到 1.1.0
+
+请先保存终端中的工作，停止所有 Server/Agent，并备份 `.local/`（使用自定义数据库或配置路径时也需备份对应文件）。Server、Agent 和网页须一起升级到使用 `ergent.preview.v3` 的版本；不要让新旧 Server 同时访问同一数据库。首次升级会将旧登录失败计数（包括永久封禁）清零并记录 `legacy_reset` 审计；回退旧版本需恢复升级前备份。详见[更新与平台要求](scripts/release/README.md#更新与平台要求)和[登录保护与审计](scripts/release/README.md#登录保护与审计)。
+
 ## 开发与打包
 
 ```sh
@@ -75,7 +79,7 @@ sh scripts/cargo.sh run -p ergent-protocol --example export --locked
 sh scripts/pnpm.sh build
 sh scripts/pnpm.sh exec playwright install chromium
 sh scripts/pnpm.sh test:e2e
-python3 scripts/package.py --expect-version v1.0.0
+python3 scripts/package.py --expect-version v1.1.0
 ```
 
 本机打包当前平台。推送与项目版本一致的 `v*` 标签后，GitHub Actions 构建并校验全部六个平台。Release 不存在时创建含校验和的草稿；已存在时只补传缺失附件，同名附件须校验一致，不覆盖已有文件。
