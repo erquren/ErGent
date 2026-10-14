@@ -250,7 +250,9 @@ export function TerminalView({
   }, [theme]);
   return (
     <div className="terminal-shell">
-      <div className="terminal-canvas" ref={container} />
+      <div className="terminal-canvas">
+        <div className="terminal-host" ref={container} />
+      </div>
       <div className="terminal-keys" aria-label={t("终端快捷键")}>
         <div className="key-row">
           <button

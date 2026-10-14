@@ -209,6 +209,97 @@ test("real terminals, card switching, browser refresh, server restart, and write
   expect(errors).toEqual([]);
 });
 
+for (const mobile of [false, true]) {
+  test(`terminal bottom row stays visible at adjacent ${mobile ? "mobile" : "desktop"} heights`, async ({
+    browser,
+  }) => {
+    const width = mobile ? 390 : 1440;
+    const fullHeight = mobile ? 844 : 960;
+    const compactHeight = mobile ? 440 : 620;
+    const context = await browser.newContext({
+      locale: "zh-CN",
+      viewport: { width, height: fullHeight },
+      isMobile: mobile,
+      hasTouch: mobile,
+      storageState: await api.storageState(),
+    });
+    const page = await context.newPage();
+    const title = `Terminal fit ${mobile ? "mobile" : "desktop"}`;
+    const response = await api.post(`/api/v1/machines/${machineId}/sessions`, {
+      headers: { ...headers(), "Idempotency-Key": randomUUID() },
+      data: { title, cwd: folder, cols: 80, rows: 24 },
+    });
+    expect(response.ok()).toBeTruthy();
+    const sessionId = (await response.json()).data.sessionId;
+    try {
+      await page.goto(origin);
+      if (mobile)
+        await page.getByRole("button", { name: "设备 / 终端" }).click();
+      await page.locator(".session-card").filter({ hasText: title }).click();
+      await expect(page.getByText("已连接 · 输入在设备上执行")).toBeVisible();
+
+      // Sweep more than a cell's height in one-pixel steps: rounding can hide
+      // the padding error at one height and clip the last row at the next.
+      // Restore and shrink again to cover keyboard-like viewport changes.
+      const heights = [
+        ...Array.from({ length: 24 }, (_, i) => compactHeight + i),
+        fullHeight,
+        compactHeight,
+      ];
+      for (const [index, height] of heights.entries()) {
+        await page.setViewportSize({ width, height });
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) =>
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() => resolve()),
+              ),
+            ),
+        );
+        const marker = `FIT_BOTTOM_${index}`;
+        await page.locator(".xterm-helper-textarea").focus();
+        // CUP clamps to the last row. Keep the prompt and cursor there too.
+        await page.keyboard.type(`printf '\\033[999;1H${marker}'\n`);
+        await expect(page.locator(".xterm-rows > div").last()).toContainText(
+          marker,
+        );
+        await expect
+          .poll(async () =>
+            page.evaluate(() => {
+              const canvas = document.querySelector(".terminal-canvas")!;
+              const bounds = canvas.getBoundingClientRect();
+              const style = getComputedStyle(canvas);
+              const bottom = bounds.bottom - parseFloat(style.paddingBottom);
+              const screen = document
+                .querySelector(".xterm-screen")!
+                .getBoundingClientRect();
+              const cursor = document
+                .querySelector(".xterm-cursor")
+                ?.getBoundingClientRect();
+              const status = document
+                .querySelector(".terminal-status")!
+                .getBoundingClientRect();
+              return (
+                screen.bottom <= bottom + 0.5 &&
+                cursor !== undefined &&
+                cursor.bottom <= bottom + 0.5 &&
+                cursor.top >= bounds.top + parseFloat(style.paddingTop) - 0.5 &&
+                screen.bottom <= status.top + 0.5
+              );
+            }),
+          )
+          .toBeTruthy();
+      }
+    } finally {
+      await context.close();
+      await api.post(`/api/v1/sessions/${sessionId}/close`, {
+        headers: { ...headers(), "Idempotency-Key": randomUUID() },
+        data: {},
+      });
+    }
+  });
+}
+
 test("mobile layout, terminal shortcuts and compact viewport", async ({
   browser,
 }) => {
