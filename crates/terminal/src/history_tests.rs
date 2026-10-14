@@ -3,22 +3,30 @@ use super::*;
 fn wait_for_exit(manager: &TerminalManager, id: &str) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while manager.get(id).unwrap().state.lock().info.lifecycle != "exited" {
-        assert!(Instant::now() < deadline, "terminal did not exit");
+        if Instant::now() >= deadline {
+            let session = manager.get(id).unwrap();
+            let state = session.state.lock();
+            panic!(
+                "terminal did not exit: lifecycle={}, resources={}, screen={:?}",
+                state.info.lifecycle,
+                session.resources.lock().is_some(),
+                state.parser.as_ref().map(|p| p.screen().contents())
+            );
+        }
         std::thread::sleep(Duration::from_millis(10));
     }
 }
 
 fn exit_naturally(manager: &TerminalManager, id: &str) {
     let session = manager.get(id).unwrap();
-    session
-        .resources
-        .lock()
-        .as_ref()
-        .unwrap()
-        .writer
-        .lock()
-        .write_all(b"exit\r")
-        .unwrap();
+    let resources = session.resources.lock().clone().unwrap();
+    let mut writer = resources.writer.lock();
+    // Headless ConPTY tests have no xterm to answer its inherited-cursor query.
+    #[cfg(windows)]
+    writer.write_all(b"\x1b[1;1R").unwrap();
+    writer.write_all(b"exit\r").unwrap();
+    drop(writer);
+    drop(resources);
     wait_for_exit(manager, id);
 }
 
