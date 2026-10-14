@@ -65,7 +65,7 @@ struct Session {
 }
 struct Resources {
     input: mpsc::SyncSender<QueuedInput>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<ProcessKiller>,
     #[cfg(unix)]
@@ -271,7 +271,7 @@ impl TerminalManager {
             close_lock: Mutex::new(()),
             resources: Mutex::new(Some(Arc::new(Resources {
                 input,
-                writer: Mutex::new(writer),
+                writer: Arc::new(Mutex::new(writer)),
                 master: Mutex::new(pair.master),
                 killer: Mutex::new(killer),
                 #[cfg(unix)]
@@ -288,12 +288,15 @@ impl TerminalManager {
                     break;
                 };
                 let result = (|| -> Result<()> {
-                    let resources = session
+                    // Do not keep the PTY master alive while waiting on its input
+                    // pipe. ConPTY teardown must be able to close the other end.
+                    let writer = session
                         .resources
                         .lock()
-                        .clone()
+                        .as_ref()
+                        .map(|resources| resources.writer.clone())
                         .ok_or_else(|| anyhow!("terminal has exited"))?;
-                    let mut writer = resources.writer.lock();
+                    let mut writer = writer.lock();
                     check_lease(&session.state.lock(), &input.viewer, &input.lease_id)?;
                     writer.write_all(&input.bytes)?;
                     Ok(())
@@ -1296,7 +1299,10 @@ mod tests {
             &mut *resources.writer.lock(),
             Box::new(Capture(captured.clone())),
         );
-        let writer = resources.writer.lock();
+        let retired = Arc::downgrade(&resources);
+        let writer_handle = resources.writer.clone();
+        drop(resources);
+        let writer = writer_handle.lock();
         let mut events = manager.events();
         let pending = manager.clone();
         let (queued, received) = mpsc::channel();
@@ -1318,11 +1324,17 @@ mod tests {
             .unwrap()
             .is_ok());
         let deadline = Instant::now() + Duration::from_secs(5);
-        while session.state.lock().inputs.is_empty() {
+        while session.state.lock().inputs.is_empty() || Arc::strong_count(&writer_handle) < 3 {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
         }
         manager.handle("v", attach()).unwrap();
+        session.kill().unwrap();
+        session.resources.lock().take();
+        assert!(
+            retired.upgrade().is_none(),
+            "blocked input retained the PTY master"
+        );
         drop(writer);
         write.join().unwrap();
         loop {
@@ -1350,7 +1362,6 @@ mod tests {
             )
             .is_err());
         assert!(session.state.lock().lease.is_none());
-        manager.close("s").unwrap();
     }
 
     #[cfg(unix)]

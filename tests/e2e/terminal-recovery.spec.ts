@@ -615,3 +615,34 @@ test("lost and terminating notices remain truthful during transport changes", as
     connection.dispose();
   }
 });
+
+test("resize pauses readiness immediately and old output cannot re-enable input", async () => {
+  const h = harness(),
+    socket = new Socket();
+  try {
+    await ready(h, socket);
+    h.connection.resize(100, 30);
+    expect(h.writable.at(-1)).toBe(false);
+    expect(h.notices.at(-1)).toBe("正在同步终端…");
+    const claims = socket.commands("terminal.lease.claim").length;
+    await new Promise((r) => setTimeout(r, 60));
+    output(socket, 0, "old-size-output");
+    h.term.finish();
+    expect(socket.commands("terminal.lease.claim")).toHaveLength(claims);
+    h.connection.transmit("not-ready");
+    expect(socket.commands("terminal.input")).toHaveLength(0);
+    socket.emit({
+      type: "terminal.resync",
+      payload: { sessionId: "s", streamId: "stream", reason: "resized" },
+    });
+    await sync(socket, true, "0", "resized");
+    snapshot(socket, "new-size", true, 0, "resized");
+    h.term.finish();
+    lease(socket, "resized");
+    expect(h.writable.at(-1)).toBe(true);
+    h.connection.transmit("ready");
+    expect(socket.commands("terminal.input")).toHaveLength(1);
+  } finally {
+    h.connection.dispose();
+  }
+});

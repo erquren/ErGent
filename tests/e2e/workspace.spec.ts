@@ -368,6 +368,8 @@ for (const mobile of [false, true]) {
               ),
             ),
         );
+        // Geometry changes explicitly resync before accepting further input.
+        await expect(page.getByText("已连接 · 输入在设备上执行")).toBeVisible();
         const marker = `FIT_BOTTOM_${index}`;
         await page.locator(".xterm-helper-textarea").focus();
         // CUP clamps to the last row. Keep the prompt and cursor there too.

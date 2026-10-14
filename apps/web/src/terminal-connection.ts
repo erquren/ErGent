@@ -28,6 +28,7 @@ type Binding = {
   outstanding: boolean;
   ready: boolean;
   ending: boolean;
+  resizing: boolean;
   lease: string | null;
   pending: Set<string>;
   timer?: ReturnType<typeof setTimeout>;
@@ -108,6 +109,7 @@ export class TerminalConnection {
       outstanding: false,
       ready: false,
       ending: false,
+      resizing: false,
       lease: null,
       pending: new Set(),
       message: (raw) => this.message(binding, raw),
@@ -152,6 +154,7 @@ export class TerminalConnection {
     const requestId = binding.requestId;
     binding.streamId = null;
     binding.ready = false;
+    binding.resizing = false;
     binding.lease = null;
     binding.outstanding = false;
     this.writable(false);
@@ -461,6 +464,7 @@ export class TerminalConnection {
   private synchronized(binding: Binding): void {
     if (
       !binding.ready &&
+      !binding.resizing &&
       !binding.snapshot &&
       binding.cursor &&
       binding.cursor.seq >= binding.head
@@ -479,11 +483,20 @@ export class TerminalConnection {
   }
   resize(cols: number, rows: number): void {
     const b = this.binding;
-    if (b?.lease && b.ready && !b.ending && this.lifecycle() === "running")
-      this.send(b, {
-        type: "terminal.resize",
-        payload: { sessionId: this.sessionId, leaseId: b.lease, cols, rows },
-      });
+    if (!b?.lease || !b.ready || b.ending || this.lifecycle() !== "running")
+      return;
+    if (b.cursor?.cols === cols && b.cursor.rows === rows) return;
+    // Changing local geometry invalidates the applied output cursor. Pause before
+    // sending resize, rather than exposing a writable lease until its resync event
+    // arrives. The initial fit must settle before announcing input readiness.
+    b.ready = false;
+    b.resizing = true;
+    this.writable(false);
+    this.notice("正在同步终端…");
+    this.send(b, {
+      type: "terminal.resize",
+      payload: { sessionId: this.sessionId, leaseId: b.lease, cols, rows },
+    });
   }
   transmit(data: string): void {
     const b = this.binding;
