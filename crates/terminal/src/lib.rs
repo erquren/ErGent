@@ -55,8 +55,12 @@ impl Session {
         if let Some(pid) = resources.pid {
             // Only kill the dedicated PTY process group, never our own or an unrelated group.
             unsafe {
-                if libc::getpgid(pid as i32) == pid as i32 {
-                    libc::killpg(pid as i32, libc::SIGKILL);
+                if libc::getpgid(pid as i32) == pid as i32
+                    && libc::killpg(pid as i32, libc::SIGKILL) == 0
+                {
+                    // The dedicated group (including its leader) was signalled.
+                    // A redundant second kill can race reaping and report ESRCH.
+                    return Ok(());
                 }
             }
         }
@@ -236,24 +240,33 @@ impl TerminalManager {
         sessions.insert(id.into(), session.clone());
         let events = self.events.clone();
         let read_state = state.clone();
+        #[cfg(unix)]
+        let exited_at = Arc::new(Mutex::new(None::<Instant>));
+        #[cfg(unix)]
+        let read_exited_at = exited_at.clone();
+        let (reader_done, reader_finished) = std::sync::mpsc::sync_channel(1);
         std::thread::spawn(move || {
             let mut buffer = [0u8; 8192];
-            loop {
+            let complete = loop {
                 #[cfg(unix)]
                 {
                     use std::os::fd::AsRawFd;
-                    if read_state.lock().parser.is_none() {
-                        break;
+                    let exited_at = *read_exited_at.lock();
+                    if exited_at.is_some_and(|at| at.elapsed() >= Duration::from_secs(2)) {
+                        break false;
                     }
                     let mut descriptor = libc::pollfd {
                         fd: poll_fd.as_raw_fd(),
                         events: libc::POLLIN,
                         revents: 0,
                     };
-                    // A background descendant can retain the slave after its shell exits.
-                    // Periodic cancellation releases our reader without killing that process.
+                    // Drain queued tail output before releasing a reader whose slave may
+                    // still be held by descendants. Quiet after shell exit is a boundary.
                     let ready = unsafe { libc::poll(&mut descriptor, 1, 100) };
                     if ready == 0 {
+                        if exited_at.is_some() {
+                            break true;
+                        }
                         continue;
                     }
                     if ready < 0 {
@@ -261,11 +274,11 @@ impl TerminalManager {
                         {
                             continue;
                         }
-                        break;
+                        break false;
                     }
                 }
                 match reader.read(&mut buffer) {
-                    Ok(0) => break,
+                    Ok(0) => break true,
                     Ok(n) => {
                         let mut s = read_state.lock();
                         let Some(parser) = s.parser.as_mut() else {
@@ -274,7 +287,7 @@ impl TerminalManager {
                             #[cfg(windows)]
                             continue;
                             #[cfg(not(windows))]
-                            break;
+                            break false;
                         };
                         parser.process(&buffer[..n]);
                         s.seq += 1;
@@ -291,25 +304,43 @@ impl TerminalManager {
                         }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(_) => break,
+                    #[cfg(unix)]
+                    Err(e) if e.raw_os_error() == Some(libc::EIO) => break true,
+                    Err(e) => {
+                        break matches!(
+                            e.kind(),
+                            std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::UnexpectedEof
+                        )
+                    }
                 }
-            }
+            };
+            let _ = reader_done.send(complete);
         });
         let events = self.events.clone();
         std::thread::spawn(move || {
             let exit = child.wait();
             let exited = exit.is_ok();
+            let drained = if exited {
+                #[cfg(unix)]
+                {
+                    *exited_at.lock() = Some(Instant::now());
+                }
+                // In particular, ClosePseudoConsole must run without the reader's
+                // state lock: it can synchronously wait for that reader to drain.
+                let resources = session.resources.lock().take();
+                drop(resources);
+                reader_finished
+                    .recv_timeout(Duration::from_secs(3))
+                    .unwrap_or(false)
+            } else {
+                false
+            };
             let mut s = state.lock();
             s.info.lifecycle = "exited".into();
             s.info.exit_code = exit.ok().map(|v| v.exit_code());
             s.lease = None;
             // Reclaim only after confirmed exit. A wait error must retain the runtime
             // so it still counts against capacity and can be killed at shutdown.
-            let resources = if exited {
-                session.resources.lock().take()
-            } else {
-                None
-            };
             if exited {
                 s.parser = None;
                 s.inputs = VecDeque::new();
@@ -317,6 +348,9 @@ impl TerminalManager {
                 s.tool_turns = VecDeque::new();
             }
             for viewer in &s.viewers {
+                if exited && !drained {
+                    send(&events, viewer, Event::error("OUTPUT_TRUNCATED", "Terminal exited before all output could be drained; final output may be incomplete."));
+                }
                 send(
                     &events,
                     viewer,
@@ -331,10 +365,6 @@ impl TerminalManager {
             let _ = events.send(AgentEvent::Session {
                 session: s.info.clone(),
             });
-            drop(s);
-            // In particular, ClosePseudoConsole must never run with the reader's
-            // state lock held: it can synchronously wait for that reader to drain.
-            drop(resources);
         });
         Ok(info)
     }

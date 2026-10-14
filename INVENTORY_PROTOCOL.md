@@ -23,6 +23,15 @@ former 1,000 lifetime-create limit has been removed. After confirmed process exi
 PTY master/writer/killer handles, the VT parser, viewer/lease state and deduplication
 caches are released. Historical records do not retain an attachable terminal screen.
 
+Exit publication waits for the PTY reader to drain the child's queued tail output.
+ConPTY resources are closed outside the parser lock so their output can keep
+draining. On Unix, a quiet 100 ms poll after shell exit ends the stream even if a
+background descendant still holds a slave handle. Continuous descendant output is
+drained for at most two seconds; a failed/expired drain sends `OUTPUT_TRUNCATED`
+to attached viewers before the final lifecycle event. This boundary does not claim
+to capture future output from detached descendants, and no authoritative exited
+snapshot is retained. Metadata retention is independent of terminal-output retention.
+
 The Server retains all session metadata in SQLite, including exited/lost records
 from prior Agent epochs. A complete inventory marks only missing running sessions
 as lost; it never deletes historical records. Metadata storage grows with history;
@@ -75,7 +84,8 @@ Rust tests cover 1,501 records, >64 KiB Hello/Inventory/browser envelopes, large
 individual payloads, exact fragment boundaries, Unicode, empty lists, replay,
 incomplete/restarted transfers, cross-machine and duplicate IDs, replaced
 connections, transactional rollback, and retaining history over a second sync.
-Terminal tests cover real PTY exit cleanup and create/idempotency with 1,501
+Terminal tests cover real PTY exit cleanup, queued 128 KiB tail output before exit,
+background descendants, and create/idempotency with 1,501
 historical records plus the 20-active limit. Browser receiver tests run under the
 Playwright test runner without needing Chromium and verify atomic list publication,
 reconnect, malformed chunks and timeout. Existing browser end-to-end tests exercise
