@@ -1,7 +1,10 @@
 mod tool_events;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use ergent_protocol::{AgentCommand, AgentEvent, Event, MAX_MESSAGE, SUBPROTOCOL};
+use ergent_protocol::{
+    inventory::{chunks, encode_message, TRANSFER_TIMEOUT_SECS},
+    AgentCommand, AgentEvent, Event, MAX_MESSAGE, SUBPROTOCOL,
+};
 use ergent_terminal::TerminalManager;
 use fs4::fs_std::FileExt;
 use futures_util::{SinkExt, StreamExt};
@@ -234,8 +237,8 @@ async fn connect(config: &Config, epoch: &str, manager: &Arc<TerminalManager>) -
         default_cwd: std::env::current_dir()?.to_string_lossy().into(),
         sessions: manager.list(),
     };
-    ws.send(Message::Text(serde_json::to_string(&hello)?.into()))
-        .await?;
+    let mut transfer_id = 0;
+    send_event(&mut ws, &hello, &mut transfer_id).await?;
     let mut last = Instant::now();
     let mut tick = tokio::time::interval(Duration::from_secs(10));
     loop {
@@ -243,7 +246,7 @@ async fn connect(config: &Config, epoch: &str, manager: &Arc<TerminalManager>) -
             event=events.recv()=>{
                 // Lag means the stream has a gap. Reconnect and require a fresh snapshot instead of corrupting the screen.
                 let event=event.context("输出队列落后，重新同步")?;
-                tokio::time::timeout(Duration::from_secs(10),ws.send(Message::Text(serde_json::to_string(&event)?.into()))).await??;
+                send_event(&mut ws, &event, &mut transfer_id).await?;
             }
             _=tick.tick()=>{
                 manager.expire_leases();if last.elapsed()>Duration::from_secs(45){bail!("服务端心跳超时");}
@@ -271,7 +274,7 @@ async fn connect(config: &Config, epoch: &str, manager: &Arc<TerminalManager>) -
                             }
                             AgentCommand::ViewerGone{viewer_id}=>{manager.disconnect(&viewer_id);None}
                         };
-                        if let Some(reply)=reply{tokio::time::timeout(Duration::from_secs(10),ws.send(Message::Text(serde_json::to_string(&reply)?.into()))).await??;}
+                        if let Some(reply)=reply{send_event(&mut ws, &reply, &mut transfer_id).await?;}
                     }
                     Message::Close(_)=>bail!("服务器关闭连接"),
                     Message::Binary(_)=>bail!("preview 不接受二进制控制帧"),
@@ -280,4 +283,34 @@ async fn connect(config: &Config, epoch: &str, manager: &Arc<TerminalManager>) -
             }
         }
     }
+}
+
+/// Serialize one whole inventory transfer before sending other events on this connection.
+async fn send_event<S>(ws: &mut S, event: &AgentEvent, transfer_id: &mut u64) -> Result<()>
+where
+    S: futures_util::Sink<Message> + Unpin,
+    S::Error: std::error::Error + Send + Sync + 'static,
+{
+    let send = async {
+        if matches!(
+            event,
+            AgentEvent::Hello { .. } | AgentEvent::Inventory { .. }
+        ) {
+            *transfer_id = transfer_id
+                .checked_add(1)
+                .context("inventory sequence exhausted")?;
+            for chunk in chunks(event, *transfer_id).map_err(anyhow::Error::msg)? {
+                let text = encode_message(&AgentEvent::InventoryChunk(chunk))
+                    .map_err(anyhow::Error::msg)?;
+                tokio::time::timeout(Duration::from_secs(10), ws.send(Message::Text(text.into())))
+                    .await??;
+            }
+        } else {
+            let text = encode_message(event).map_err(anyhow::Error::msg)?;
+            tokio::time::timeout(Duration::from_secs(10), ws.send(Message::Text(text.into())))
+                .await??;
+        }
+        Ok(())
+    };
+    tokio::time::timeout(Duration::from_secs(TRANSFER_TIMEOUT_SECS), send).await?
 }

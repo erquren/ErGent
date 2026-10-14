@@ -12,11 +12,15 @@ use axum::{
     response::Response,
 };
 use ergent_protocol::{
+    inventory::{chunks, InventoryAssembler, TRANSFER_TIMEOUT_SECS},
     AgentCommand, AgentEvent, BrowserCommand, Event, SessionInfo, MAX_MESSAGE, SUBPROTOCOL,
 };
 use serde_json::json;
 use sqlx::Row;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
@@ -119,10 +123,12 @@ async fn agent_socket(app: App, mut socket: WebSocket, machine: String, owner: S
     let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
     let mut last = Instant::now();
     let mut epoch = None;
+    let mut inventory = InventoryAssembler::default();
+    let mut inventory_started: Option<Instant> = None;
     loop {
         tokio::select! {
             _ = stopped.changed() => break,
-            _ = heartbeat.tick() => { if last.elapsed()>Duration::from_secs(45) || ping(&mut socket).await.is_err() { break; } }
+            _ = heartbeat.tick() => { if inventory_started.is_some_and(|t|t.elapsed()>Duration::from_secs(TRANSFER_TIMEOUT_SECS)) || last.elapsed()>Duration::from_secs(45) || ping(&mut socket).await.is_err() { break; } }
             command = rx.recv() => { let Some(command)=command else { break }; if send(&mut socket,&command).await.is_err() { break; } }
             message = socket.recv() => {
                 let Some(Ok(message))=message else { break }; last=Instant::now();
@@ -130,10 +136,30 @@ async fn agent_socket(app: App, mut socket: WebSocket, machine: String, owner: S
                 if !current { break; }
                 if let Message::Text(text) = message {
                     let Ok(event)=serde_json::from_str::<AgentEvent>(&text) else { break };
+                    let event = match event {
+                        AgentEvent::InventoryChunk(chunk) => {
+                            let started = inventory_started.get_or_insert_with(Instant::now);
+                            if started.elapsed()>Duration::from_secs(TRANSFER_TIMEOUT_SECS) { break; }
+                            match inventory.push(chunk) {
+                                Ok(Some(bytes)) => {
+                                    inventory_started = None;
+                                    let Ok(event) = serde_json::from_slice::<AgentEvent>(&bytes) else { break };
+                                    if !matches!(event, AgentEvent::Hello { .. } | AgentEvent::Inventory { .. }) { break; }
+                                    event
+                                }
+                                Ok(None) => continue,
+                                Err(_) => break,
+                            }
+                        }
+                        // v2 inventories must use the bounded transfer, even when small.
+                        AgentEvent::Hello { .. } | AgentEvent::Inventory { .. } => break,
+                        event => { if inventory.in_progress() { break; } event }
+                    };
                     match event {
+                        AgentEvent::InventoryChunk(_) => unreachable!(),
                         AgentEvent::Hello { epoch: e, default_cwd, sessions } => {
-                            if epoch.is_some() || sessions.len()>1000 || default_cwd.len()>4096 { break; }
-                            if reconcile(&app,&machine,&e,sessions).await.is_err() { break; }
+                            if epoch.is_some() || e.is_empty() || e.len()>128 || default_cwd.len()>4096 { break; }
+                            if reconcile(&app,&machine,&e,sessions,&connection).await.is_err() { break; }
                             if sqlx::query("UPDATE machines SET default_cwd=? WHERE id=? AND revoked=0").bind(default_cwd).bind(&machine).execute(&app.db).await.is_err() { break; }
                             epoch=Some(e);
                             if let Some(a)=app.hub.lock().await.agents.get_mut(&machine) { if a.connection==connection { a.ready=true; } }
@@ -141,7 +167,7 @@ async fn agent_socket(app: App, mut socket: WebSocket, machine: String, owner: S
                             app.notify_inventory().await;
                         }
                         AgentEvent::Inventory { sessions } => {
-                            let Some(e)=&epoch else { break }; if reconcile(&app,&machine,e,sessions).await.is_err() { break; } app.notify_inventory().await;
+                            let Some(e)=&epoch else { break }; if reconcile(&app,&machine,e,sessions,&connection).await.is_err() { break; } app.notify_inventory().await;
                         }
                         AgentEvent::Session { session } => {
                             if Some(&session.agent_epoch)!=epoch.as_ref() || session.machine_id!=machine { break; }
@@ -219,35 +245,79 @@ async fn reconcile(
     machine: &str,
     epoch: &str,
     sessions: Vec<SessionInfo>,
+    connection: &str,
 ) -> Result<(), ApiError> {
-    if sessions.len() > 1000
-        || sessions
-            .iter()
-            .any(|s| s.machine_id != machine || s.agent_epoch != epoch)
+    let mut ids = HashSet::with_capacity(sessions.len());
+    if sessions
+        .iter()
+        .any(|s| s.machine_id != machine || s.agent_epoch != epoch || !ids.insert(s.id.clone()))
     {
         return Err(ApiError::not_found());
     }
-    let lost: Vec<_> = app
-        .hub
-        .lock()
-        .await
+    // Validate the complete list before changing anything. The hub lock also keeps a
+    // replacement connection from publishing a newer inventory during this commit.
+    let mut hub = app.hub.lock().await;
+    if !hub
+        .agents
+        .get(machine)
+        .is_some_and(|a| a.connection == connection)
+        || sessions.iter().any(|s| {
+            hub.sessions
+                .get(&s.id)
+                .is_some_and(|old| old.machine_id != machine)
+        })
+    {
+        return Err(ApiError::not_found());
+    }
+    let mut updates: Vec<_> = hub
         .sessions
         .values()
         .filter(|s| {
             s.machine_id == machine
                 && s.lifecycle == "running"
-                && (s.agent_epoch != epoch || !sessions.iter().any(|n| n.id == s.id))
+                && (s.agent_epoch != epoch || !ids.contains(&s.id))
         })
         .cloned()
+        .map(|mut s| {
+            s.lifecycle = "lost".into();
+            s
+        })
         .collect();
-    for mut session in lost {
-        session.lifecycle = "lost".into();
-        save_session(app, &session).await?;
+    updates.extend(sessions);
+    let mut transaction = app.db.begin().await?;
+    for session in &updates {
+        let data = serde_json::to_string(session).map_err(|_| ApiError::internal())?;
+        sqlx::query("INSERT INTO terminal_sessions VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data WHERE machine_id=excluded.machine_id")
+            .bind(&session.id).bind(&session.machine_id).bind(data).execute(&mut *transaction).await?;
     }
-    for session in sessions {
-        save_session(app, &session).await?;
+    transaction.commit().await?;
+    for session in updates {
+        hub.sessions.insert(session.id.clone(), session);
     }
     Ok(())
+}
+
+/// Chunk at the socket boundary so a large inventory occupies one bounded queue item,
+/// never hundreds of queued fragments. No output or newer inventory can interleave.
+async fn send_browser_event(
+    socket: &mut WebSocket,
+    event: &Event,
+    transfer_id: &mut u64,
+) -> Result<(), ()> {
+    if matches!(event, Event::Inventory { .. }) {
+        *transfer_id = transfer_id.checked_add(1).ok_or(())?;
+        let parts = chunks(event, *transfer_id).map_err(|_| ())?;
+        tokio::time::timeout(Duration::from_secs(TRANSFER_TIMEOUT_SECS), async {
+            for chunk in parts {
+                send(socket, &Event::InventoryChunk(chunk)).await?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|_| ())?
+    } else {
+        send(socket, event).await
+    }
 }
 async fn browser_socket(app: App, mut socket: WebSocket, owner: String, auth_hash: String) {
     let viewer_id = Uuid::new_v4().to_string();
@@ -269,8 +339,12 @@ async fn browser_socket(app: App, mut socket: WebSocket, owner: String, auth_has
             },
         );
     }
+    let mut transfer_id = 0;
     if let Ok(event) = app.inventory(&owner).await {
-        if send(&mut socket, &event).await.is_err() {
+        if send_browser_event(&mut socket, &event, &mut transfer_id)
+            .await
+            .is_err()
+        {
             cleanup(&app, &viewer_id, &owner).await;
             return;
         }
@@ -284,7 +358,7 @@ async fn browser_socket(app: App, mut socket: WebSocket, owner: String, auth_has
                 let valid=sqlx::query_scalar::<_,i64>("SELECT count(*) FROM web_sessions WHERE token_hash=? AND expires_at>?").bind(&auth_hash).bind(now()).fetch_one(&app.db).await.unwrap_or(0)>0;
                 if !valid||last.elapsed()>Duration::from_secs(45)||ping(&mut socket).await.is_err(){break;}
             }
-            event=rx.recv()=>{let Some(event)=event else{break};if send(&mut socket,&event).await.is_err(){break;}}
+            event=rx.recv()=>{let Some(event)=event else{break};if send_browser_event(&mut socket,&event,&mut transfer_id).await.is_err(){break;}}
             message=socket.recv()=>{
                 let Some(Ok(message))=message else{break};last=Instant::now();
                 if let Message::Text(text)=message {
@@ -381,3 +455,7 @@ async fn route_browser(
     })?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "inventory_tests.rs"]
+mod inventory_tests;

@@ -928,7 +928,7 @@ test("cross-user isolation, agent restart, close, and device revocation", async 
       Upgrade: "websocket",
       "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
       "Sec-WebSocket-Version": "13",
-      "Sec-WebSocket-Protocol": "ergent.preview.v1",
+      "Sec-WebSocket-Protocol": "ergent.preview.v2",
     },
   });
   expect(badOrigin.status()).toBe(403);
@@ -1014,7 +1014,7 @@ test("cross-user isolation, agent restart, close, and device revocation", async 
       Upgrade: "websocket",
       "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
       "Sec-WebSocket-Version": "13",
-      "Sec-WebSocket-Protocol": "ergent.preview.v1",
+      "Sec-WebSocket-Protocol": "ergent.preview.v2",
     },
   });
   expect(reconnect.status()).toBe(401);

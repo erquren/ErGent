@@ -37,6 +37,7 @@ import { useAppearance, terminalTheme, terminalThemes } from "./theme";
 import { GlassPopover } from "./GlassPopover";
 import "./glass.css";
 import { toolLabel } from "./tool-status";
+import { InventoryReceiver, INVENTORY_TIMEOUT_MS } from "./inventory";
 
 function App() {
   const { preference, setPreference } = useLanguage();
@@ -191,8 +192,10 @@ function App() {
       receivedInventory = false;
       const ws = new WebSocket(
         `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/v1/ws/browser`,
-        "ergent.preview.v1",
+        "ergent.preview.v2",
       );
+      const inventory = new InventoryReceiver();
+      let inventoryTimer: ReturnType<typeof setTimeout> | undefined;
       wsRef.current = ws;
       ws.onopen = () => {
         setConnected(true);
@@ -201,8 +204,20 @@ function App() {
       ws.onmessage = (raw) => {
         let event: Event;
         try {
-          event = JSON.parse(raw.data);
+          if (
+            typeof raw.data !== "string" ||
+            new TextEncoder().encode(raw.data).length > 64 * 1024
+          )
+            throw new Error("Invalid message size");
+          const decoded = inventory.accept(JSON.parse(raw.data));
+          if (inventory.inProgress && inventoryTimer === undefined)
+            inventoryTimer = setTimeout(() => ws.close(), INVENTORY_TIMEOUT_MS);
+          if (!decoded) return;
+          clearTimeout(inventoryTimer);
+          inventoryTimer = undefined;
+          event = decoded;
         } catch {
+          clearTimeout(inventoryTimer);
           ws.close();
           return;
         }
@@ -256,6 +271,7 @@ function App() {
         }
       };
       ws.onclose = () => {
+        clearTimeout(inventoryTimer);
         if (disposed) return;
         setConnected(false);
         setSocket(null);
