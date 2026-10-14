@@ -37,6 +37,9 @@ import { useAppearance, terminalTheme, terminalThemes } from "./theme";
 import { GlassPopover } from "./GlassPopover";
 import "./glass.css";
 import { toolLabel } from "./tool-status";
+import { InventoryReceiver, INVENTORY_TIMEOUT_MS } from "./inventory";
+import { normalizeName, nameValidationMessage } from "./names";
+import { CreatedSessions } from "./created-sessions";
 
 function App() {
   const { preference, setPreference } = useLanguage();
@@ -173,6 +176,7 @@ function App() {
     { eventId: string; sessionId: string; title: string; status: ToolStatus }[]
   >([]);
   const wsRef = useRef<WebSocket | null>(null);
+  const createdSessions = useRef(new CreatedSessions());
   useEffect(() => {
     csrf()
       .then(() => api<{ username: string }>("/auth/me"))
@@ -181,6 +185,7 @@ function App() {
       .finally(() => setLoading(false));
   }, []);
   useEffect(() => {
+    createdSessions.current = new CreatedSessions();
     if (!user) return;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -191,8 +196,10 @@ function App() {
       receivedInventory = false;
       const ws = new WebSocket(
         `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/v1/ws/browser`,
-        "ergent.preview.v1",
+        "ergent.preview.v2",
       );
+      const inventory = new InventoryReceiver();
+      let inventoryTimer: ReturnType<typeof setTimeout> | undefined;
       wsRef.current = ws;
       ws.onopen = () => {
         setConnected(true);
@@ -201,8 +208,20 @@ function App() {
       ws.onmessage = (raw) => {
         let event: Event;
         try {
-          event = JSON.parse(raw.data);
+          if (
+            typeof raw.data !== "string" ||
+            new TextEncoder().encode(raw.data).length > 64 * 1024
+          )
+            throw new Error("Invalid message size");
+          const decoded = inventory.accept(JSON.parse(raw.data));
+          if (inventory.inProgress && inventoryTimer === undefined)
+            inventoryTimer = setTimeout(() => ws.close(), INVENTORY_TIMEOUT_MS);
+          if (!decoded) return;
+          clearTimeout(inventoryTimer);
+          inventoryTimer = undefined;
+          event = decoded;
         } catch {
+          clearTimeout(inventoryTimer);
           ws.close();
           return;
         }
@@ -245,8 +264,9 @@ function App() {
           receivedInventory = true;
           setMachines(event.payload.machines);
           setSessions(
-            event.payload.sessions.filter((s) =>
-              ["running", "terminating"].includes(s.lifecycle),
+            createdSessions.current.receive(
+              event.payload.machines,
+              event.payload.sessions,
             ),
           );
           const ended = new Set(
@@ -258,6 +278,7 @@ function App() {
         }
       };
       ws.onclose = () => {
+        clearTimeout(inventoryTimer);
         if (disposed) return;
         setConnected(false);
         setSocket(null);
@@ -271,6 +292,7 @@ function App() {
     connect();
     return () => {
       disposed = true;
+      createdSessions.current = new CreatedSessions();
       clearTimeout(timer);
       wsRef.current?.close();
       setSocket(null);
@@ -311,15 +333,32 @@ function App() {
   };
   const create = () =>
     act(async () => {
+      const tracker = createdSessions.current;
       const result = await api<{ operationId: string; sessionId: string }>(
         `/machines/${machineId}/sessions`,
         "POST",
-        { title, cwd, cols: 120, rows: 36 },
+        { title: normalizeName(title), cwd, cols: 120, rows: 36 },
         randomId(),
       );
       setModal(null);
-      await waitOperation(result.operationId);
-      setSelected(result.sessionId);
+      const operation = await waitOperation(result.operationId);
+      if (tracker !== createdSessions.current) return;
+      const session = operation.result?.session;
+      if (
+        !session ||
+        session.id !== result.sessionId ||
+        session.machineId !== machineId
+      )
+        throw new Error(t("创建结果缺少会话信息，请刷新会话列表"));
+      const created = tracker.accept(session);
+      if (created) {
+        setSessions((items) =>
+          items.some((item) => item.id === created.id)
+            ? items
+            : [...items, created],
+        );
+        setSelected(created.id);
+      }
     });
   const enroll = () =>
     act(async () => {
@@ -340,7 +379,7 @@ function App() {
       const result = await api<{ id: string; name: string }>(
         `/machines/${machineId}`,
         "PATCH",
-        { name: deviceName },
+        { name: normalizeName(deviceName) },
       );
       setMachines((items) =>
         items.map((m) =>
@@ -352,7 +391,7 @@ function App() {
   const renameTerminal = () =>
     act(async () => {
       await api(`/sessions/${editingSession}`, "PATCH", {
-        title: terminalName,
+        title: normalizeName(terminalName),
       });
       setModal(null);
     });
@@ -367,6 +406,7 @@ function App() {
   const close = () =>
     act(async () => {
       if (!active) return;
+      const tracker = createdSessions.current;
       const result = await api<{ operationId: string }>(
         `/sessions/${active.id}/close`,
         "POST",
@@ -375,28 +415,14 @@ function App() {
       );
       setConfirmClose(false);
       const operation = await waitOperation(result.operationId);
+      if (tracker !== createdSessions.current) return;
       const session = operation.result?.session;
       if (session?.id === active.id && session.machineId === active.machineId) {
-        if (session.lifecycle === "exited") {
-          setSessions((items) =>
-            items.filter((item) => item.id !== session.id),
-          );
-          setSelected((id) => (id === session.id ? null : id));
-          return;
-        }
-        // Inventory may already have observed exit and removed this terminal.
-        // Never reinsert it or replace a newer lifecycle with an older response.
-        setSessions((items) =>
-          items.map((item) =>
-            item.id === session.id && item.lifecycle === "running"
-              ? {
-                  ...item,
-                  lifecycle: session.lifecycle,
-                  exitCode: session.exitCode,
-                }
-              : item,
-          ),
-        );
+        const observed = tracker.observe(session);
+        if (!observed) return;
+        setSessions(tracker.visible());
+        if (!["running", "terminating"].includes(observed.lifecycle))
+          setSelected((id) => (id === observed.id ? null : id));
       }
     });
 
@@ -1109,9 +1135,13 @@ function App() {
                   <input
                     autoFocus
                     required
-                    maxLength={120}
                     value={terminalName}
-                    onChange={(e) => setTerminalName(e.target.value)}
+                    onChange={(e) => {
+                      setTerminalName(e.target.value);
+                      e.target.setCustomValidity(
+                        t(nameValidationMessage(e.target.value)),
+                      );
+                    }}
                   />
                 </label>
                 <p className="form-note">
@@ -1136,9 +1166,13 @@ function App() {
                   <input
                     autoFocus
                     required
-                    maxLength={120}
                     value={deviceName}
-                    onChange={(e) => setDeviceName(e.target.value)}
+                    onChange={(e) => {
+                      setDeviceName(e.target.value);
+                      e.target.setCustomValidity(
+                        t(nameValidationMessage(e.target.value)),
+                      );
+                    }}
                   />
                 </label>
                 <p className="form-note">
@@ -1181,8 +1215,12 @@ function App() {
                   {t("终端名称")}
                   <input
                     value={title}
-                    maxLength={120}
-                    onChange={(e) => setTitle(e.target.value)}
+                    onChange={(e) => {
+                      setTitle(e.target.value);
+                      e.target.setCustomValidity(
+                        t(nameValidationMessage(e.target.value)),
+                      );
+                    }}
                     required
                   />
                 </label>

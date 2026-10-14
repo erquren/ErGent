@@ -155,6 +155,8 @@ export const english: Record<string, string> = {
   需要登录: "Please sign in",
   资源不存在: "Resource not found",
   内部错误: "Internal server error",
+  "名称须为 1–120 个字符，且不能包含控制字符":
+    "Names must contain 1–120 Unicode characters and no control characters",
   "设备名须为 1–120 个字符，且不能包含控制字符":
     "Device names must be 1–120 characters without control characters.",
   "终端名称须为 1–120 个字符，且不能包含控制字符":
@@ -168,6 +170,8 @@ export const english: Record<string, string> = {
 Object.assign(english, {
   请登录或检查凭据: "Please sign in or check your credentials",
   服务内部错误: "Internal server error",
+  "创建结果缺少会话信息，请刷新会话列表":
+    "The create result is missing session details. Refresh the session list.",
   "终端名称应为 1–120 字节": "Terminal names must be 1–120 bytes",
   无效工作目录: "Invalid working directory",
   终端尺寸超出范围: "Terminal dimensions are out of range",

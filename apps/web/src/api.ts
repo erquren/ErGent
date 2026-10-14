@@ -31,11 +31,11 @@ export async function api<T>(
   if (result.data?.csrfToken) csrfToken = result.data.csrfToken;
   return result.data as T;
 }
-export type OperationResult = {
+export interface OperationResult {
   status: string;
   sessionId: string;
   result?: { session?: SessionInfo | null; error?: string | null } | null;
-};
+}
 export async function waitOperation(id: string): Promise<OperationResult> {
   for (let n = 0; n < 60; n++) {
     const op = await api<OperationResult>(`/operations/${id}`);

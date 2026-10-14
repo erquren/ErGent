@@ -209,6 +209,78 @@ test("real terminals, card switching, browser refresh, server restart, and write
   expect(errors).toEqual([]);
 });
 
+test("create selects its result before delayed inventory arrives", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    locale: "zh-CN",
+    storageState: await api.storageState(),
+  });
+  const page = await context.newPage();
+  let holdInventory = false;
+  let initialInventory: string | Buffer | undefined;
+  const held: (string | Buffer)[] = [];
+  let deliver: ((message: string | Buffer) => void) | undefined;
+  await page.routeWebSocket("**/api/v1/ws/browser", (socket) => {
+    const upstream = socket.connectToServer();
+    deliver = (message) => socket.send(message);
+    upstream.onMessage((message) => {
+      if (JSON.parse(message.toString()).type === "inventory.sync") {
+        initialInventory ??= message;
+        if (holdInventory) {
+          held.push(message);
+          return;
+        }
+      }
+      socket.send(message);
+    });
+  });
+  let sessionId: string | undefined;
+  try {
+    await page.goto(origin);
+    await expect(
+      page.getByRole("button", { name: "在 Test Mac 新建终端" }),
+    ).toBeEnabled();
+    holdInventory = true;
+    await page.getByRole("button", { name: "在 Test Mac 新建终端" }).click();
+    await page.getByLabel("终端名称").fill("Inventory race terminal");
+    const created = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith(`/machines/${machineId}/sessions`),
+    );
+    await page.getByRole("button", { name: "创建并连接" }).click();
+    sessionId = (await (await created).json()).data.sessionId;
+    await expect(
+      page.getByRole("heading", { name: /Inventory race terminal/ }),
+    ).toBeVisible();
+    await expect(page.getByText("已连接 · 输入在设备上执行")).toBeVisible();
+    expect(initialInventory).toBeDefined();
+    deliver!(initialInventory!); // An older inventory must not erase the created card.
+    await expect(
+      page.getByRole("heading", { name: /Inventory race terminal/ }),
+    ).toBeVisible();
+    await expect.poll(() => held.length).toBeGreaterThan(0);
+    holdInventory = false;
+    for (const message of held) deliver!(message);
+    await expect(
+      page
+        .locator(".session-card")
+        .filter({ hasText: "Inventory race terminal" }),
+    ).toHaveCount(1);
+    await page.locator(".xterm-helper-textarea").focus();
+    await page.keyboard.type("printf 'CREATE_%s\\n' 'RACE_OK'\n");
+    await expect(page.locator(".xterm-rows")).toContainText("CREATE_RACE_OK");
+  } finally {
+    await context.close();
+    if (sessionId)
+      await api.post(`/api/v1/sessions/${sessionId}/close`, {
+        headers: { ...headers(), "Idempotency-Key": randomUUID() },
+        data: {},
+      });
+  }
+});
+
 for (const mobile of [false, true]) {
   test(`terminal bottom row stays visible at adjacent ${mobile ? "mobile" : "desktop"} heights`, async ({
     browser,
@@ -833,6 +905,164 @@ test("language follows the device, persists across tabs, and keeps the terminal 
   }
 });
 
+test("name limits agree across enrollment, create, rename and the browser", async ({
+  browser,
+}) => {
+  const chinese = "中".repeat(120),
+    emoji = "😀".repeat(120);
+  const invalid = [
+    "中".repeat(121),
+    "😀".repeat(121),
+    "a\n",
+    "a\u0000b",
+    "a\u0085b",
+    "  ",
+  ];
+  const token = (
+    await (
+      await api.post("/api/v1/enrollments", { headers: headers(), data: {} })
+    ).json()
+  ).data.token;
+  const anon = await requestFactory.newContext({ baseURL: origin });
+  let enrolledId: string | undefined, sessionId: string | undefined;
+  const context = await browser.newContext({
+    locale: "zh-CN",
+    storageState: await api.storageState(),
+  });
+  try {
+    for (const name of invalid) {
+      expect(
+        (
+          await anon.post("/api/v1/agent/enroll", {
+            data: { enrollmentToken: token, name, os: "linux", arch: "x86_64" },
+          })
+        ).status(),
+      ).toBe(422);
+      expect(
+        (
+          await api.patch(`/api/v1/machines/${machineId}`, {
+            headers: headers(),
+            data: { name },
+          })
+        ).status(),
+      ).toBe(422);
+      expect(
+        (
+          await api.post(`/api/v1/machines/${machineId}/sessions`, {
+            headers: { ...headers(), "Idempotency-Key": randomUUID() },
+            data: { title: name, cwd: folder, cols: 80, rows: 24 },
+          })
+        ).status(),
+      ).toBe(422);
+    }
+    const enrolled = await anon.post("/api/v1/agent/enroll", {
+      data: {
+        enrollmentToken: token,
+        name: `　${chinese}　`,
+        os: "linux",
+        arch: "x86_64",
+      },
+    });
+    expect(enrolled.ok()).toBeTruthy();
+    enrolledId = (await enrolled.json()).data.machineId;
+    const machines = (await (await api.get("/api/v1/machines")).json()).data
+      .items;
+    expect(machines.find((m: { id: string }) => m.id === enrolledId).name).toBe(
+      chinese,
+    );
+    const created = await api.post(`/api/v1/machines/${machineId}/sessions`, {
+      headers: { ...headers(), "Idempotency-Key": randomUUID() },
+      data: { title: `　${emoji}　`, cwd: folder, cols: 80, rows: 24 },
+    });
+    expect(created.ok()).toBeTruthy();
+    const operation = (await created.json()).data;
+    sessionId = operation.sessionId;
+    await expect
+      .poll(
+        async () =>
+          (
+            await (
+              await api.get(`/api/v1/operations/${operation.operationId}`)
+            ).json()
+          ).data.status,
+      )
+      .toBe("succeeded");
+    const items = (
+      await (await api.get(`/api/v1/machines/${machineId}/sessions`)).json()
+    ).data.items;
+    expect(items.find((s: { id: string }) => s.id === sessionId).title).toBe(
+      emoji,
+    );
+    expect(
+      (
+        await api.patch(`/api/v1/sessions/${sessionId}`, {
+          headers: headers(),
+          data: { title: `　${chinese}　` },
+        })
+      ).ok(),
+    ).toBeTruthy();
+    for (const title of invalid)
+      expect(
+        (
+          await api.patch(`/api/v1/sessions/${sessionId}`, {
+            headers: headers(),
+            data: { title },
+          })
+        ).status(),
+      ).toBe(422);
+    expect(
+      (
+        await api.patch(`/api/v1/machines/${machineId}`, {
+          headers: headers(),
+          data: { name: `　${emoji}　` },
+        })
+      ).ok(),
+    ).toBeTruthy();
+    expect(
+      (
+        await api.patch(`/api/v1/machines/${machineId}`, {
+          headers: headers(),
+          data: { name: "Test Mac" },
+        })
+      ).ok(),
+    ).toBeTruthy();
+    const page = await context.newPage();
+    await page.goto(origin);
+    await page.getByRole("button", { name: "在 Test Mac 新建终端" }).click();
+    const input = page.getByLabel("终端名称");
+    await input.fill(emoji);
+    await expect(input).toHaveValue(emoji);
+    expect(
+      await input.evaluate((element: HTMLInputElement) =>
+        element.checkValidity(),
+      ),
+    ).toBe(true);
+    await input.fill(emoji + "😀");
+    expect(
+      await input.evaluate((element: HTMLInputElement) =>
+        element.checkValidity(),
+      ),
+    ).toBe(false);
+  } finally {
+    await context.close();
+    await anon.dispose();
+    await api.patch(`/api/v1/machines/${machineId}`, {
+      headers: headers(),
+      data: { name: "Test Mac" },
+    });
+    if (sessionId)
+      await api.post(`/api/v1/sessions/${sessionId}/close`, {
+        headers: { ...headers(), "Idempotency-Key": randomUUID() },
+        data: {},
+      });
+    if (enrolledId)
+      await api.post(`/api/v1/machines/${enrolledId}/revoke`, {
+        headers: headers(),
+        data: {},
+      });
+  }
+});
+
 test("authorization, CSRF, enrollment replay, and create idempotency", async () => {
   const anon = await requestFactory.newContext({ baseURL: origin });
   expect((await anon.get("/api/v1/machines")).status()).toBe(401);
@@ -896,6 +1126,7 @@ for (const exitBeforeReply of [false, true]) {
   }) => {
     const session = {
       id: "close-ui",
+      outputTruncated: false,
       machineId: "close-machine",
       agentEpoch: "close-epoch",
       title: "Close UI probe",
@@ -911,32 +1142,43 @@ for (const exitBeforeReply of [false, true]) {
     let socket: import("@playwright/test").WebSocketRoute;
     let polls = 0;
     let inputs = 0;
-    const inventory = (lifecycle: string) =>
+    let transfer = 0;
+    const inventory = (lifecycle: string) => {
+      const value = JSON.stringify({
+        type: "inventory.sync",
+        payload: {
+          machines: [
+            {
+              id: session.machineId,
+              name: "Close machine",
+              os: "linux",
+              arch: "test",
+              online: true,
+              revoked: false,
+              defaultCwd: "/tmp",
+            },
+          ],
+          sessions: [
+            {
+              ...session,
+              lifecycle,
+              exitCode: lifecycle === "exited" ? 0 : null,
+            },
+          ],
+        },
+      });
       socket.send(
         JSON.stringify({
-          type: "inventory.sync",
+          type: "inventory.chunk",
           payload: {
-            machines: [
-              {
-                id: session.machineId,
-                name: "Close machine",
-                os: "linux",
-                arch: "test",
-                online: true,
-                revoked: false,
-                defaultCwd: "/tmp",
-              },
-            ],
-            sessions: [
-              {
-                ...session,
-                lifecycle,
-                exitCode: lifecycle === "exited" ? 0 : null,
-              },
-            ],
+            transferId: String(++transfer),
+            index: 0,
+            last: true,
+            dataBase64: Buffer.from(value).toString("base64"),
           },
         }),
       );
+    };
     await page.routeWebSocket("**/api/v1/ws/browser", (ws) => {
       socket = ws;
       inventory("running");
@@ -1082,7 +1324,7 @@ test("cross-user isolation, agent restart, close, and device revocation", async 
       Upgrade: "websocket",
       "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
       "Sec-WebSocket-Version": "13",
-      "Sec-WebSocket-Protocol": "ergent.preview.v1",
+      "Sec-WebSocket-Protocol": "ergent.preview.v2",
     },
   });
   expect(badOrigin.status()).toBe(403);
@@ -1233,7 +1475,7 @@ test("cross-user isolation, agent restart, close, and device revocation", async 
       Upgrade: "websocket",
       "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
       "Sec-WebSocket-Version": "13",
-      "Sec-WebSocket-Protocol": "ergent.preview.v1",
+      "Sec-WebSocket-Protocol": "ergent.preview.v2",
     },
   });
   expect(reconnect.status()).toBe(401);

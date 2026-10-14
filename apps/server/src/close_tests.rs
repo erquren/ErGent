@@ -14,6 +14,7 @@ async fn fixture() -> (tempfile::TempDir, App, SessionInfo) {
         trusted_proxies: vec![],
         hub: Arc::new(Mutex::new(crate::Hub::default())),
         login_locks: Arc::new(std::array::from_fn(|_| Mutex::new(()))),
+        login_policy: crate::login_guard::Policy::default(),
     };
     sqlx::query("INSERT INTO users VALUES('owner','owner','unused')")
         .execute(&app.db)
@@ -21,6 +22,18 @@ async fn fixture() -> (tempfile::TempDir, App, SessionInfo) {
         .unwrap();
     sqlx::query("INSERT INTO machines(id,owner_id,name,os,arch,credential_hash) VALUES('machine','owner','test','test','test','unused')").execute(&app.db).await.unwrap();
     sqlx::query("INSERT INTO operations VALUES('close','owner','machine','session','close','key','request','pending',NULL,0)").execute(&app.db).await.unwrap();
+    let (tx, _) = mpsc::channel(1);
+    let (stop, _) = watch::channel(false);
+    app.hub.lock().await.agents.insert(
+        "machine".into(),
+        AgentLink {
+            connection: "connection".into(),
+            owner: "owner".into(),
+            tx,
+            stop,
+            ready: false,
+        },
+    );
     let session = SessionInfo {
         id: "session".into(),
         machine_id: "machine".into(),
@@ -33,6 +46,7 @@ async fn fixture() -> (tempfile::TempDir, App, SessionInfo) {
         cols: 80,
         rows: 24,
         exit_code: None,
+        output_truncated: false,
         tool_status: None,
     };
     save_session(&app, &session).await.unwrap();
@@ -142,7 +156,7 @@ async fn missing_terminating_process_after_agent_restart_is_lost() {
     let (_tmp, app, mut session) = fixture().await;
     session.lifecycle = "terminating".into();
     save_session(&app, &session).await.unwrap();
-    reconcile(&app, "machine", "new-epoch", vec![])
+    reconcile(&app, "machine", "new-epoch", vec![], "connection")
         .await
         .unwrap();
     assert_eq!(persisted(&app).await.lifecycle, "lost");
@@ -177,4 +191,52 @@ async fn lifecycle_guard_still_persists_non_lifecycle_metadata() {
     assert_eq!(canonical.exit_code, Some(7));
     assert_eq!(canonical.cols, 132);
     assert_eq!(persisted(&app).await, canonical);
+}
+
+#[tokio::test]
+async fn close_responses_preserve_late_truncation_in_both_orders() {
+    let (_tmp, app, mut session) = fixture().await;
+    session.lifecycle = "exited".into();
+    session.exit_code = Some(0);
+    save_session(&app, &session).await.unwrap();
+    let mut tail = session.clone();
+    tail.output_truncated = true;
+    save_session(&app, &tail).await.unwrap();
+    let mut stale = session.clone();
+    stale.lifecycle = "terminating".into();
+    stale.exit_code = None;
+    record_operation(&app, "machine", "epoch", "close", Some(stale.clone()), None)
+        .await
+        .unwrap();
+    assert!(persisted(&app).await.output_truncated);
+    assert_eq!(operation(&app).await.1["session"]["outputTruncated"], true);
+    reconcile(&app, "machine", "epoch", vec![stale], "connection")
+        .await
+        .unwrap();
+    assert_eq!(persisted(&app).await, tail);
+}
+
+#[tokio::test]
+async fn close_session_save_does_not_invert_sqlite_and_hub_locks() {
+    let (_tmp, app, mut session) = fixture().await;
+    let mut writer = app.db.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    sqlx::query("UPDATE operations SET status='pending' WHERE id='close'")
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    session.lifecycle = "terminating".into();
+    let concurrent = app.clone();
+    let saving = tokio::spawn(async move { save_session(&concurrent, &session).await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let hub = tokio::time::timeout(Duration::from_millis(500), app.hub.lock())
+        .await
+        .expect("save held hub while waiting for database writer");
+    drop(hub);
+    writer.commit().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), saving)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(persisted(&app).await.lifecycle, "terminating");
 }
