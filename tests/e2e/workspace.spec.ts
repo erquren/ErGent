@@ -9,7 +9,7 @@ import { mkdtempSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { Event } from "../../packages/protocol-ts";
+import type { BrowserCommand, Event } from "../../packages/protocol-ts";
 
 const root = process.cwd(),
   port = 17779,
@@ -932,6 +932,25 @@ test("language follows the device, persists across tabs, and keeps the terminal 
   let sessionId = "",
     sockets = 0;
   page.on("websocket", () => sockets++);
+  let holdSync = false;
+  let releaseSync: (() => void) | undefined;
+  let inputFrames = 0;
+  await page.routeWebSocket("**/api/v1/ws/browser", (socket) => {
+    const upstream = socket.connectToServer();
+    socket.onMessage((message) => {
+      const command: BrowserCommand = JSON.parse(message.toString());
+      if (command.type === "terminal.input") inputFrames++;
+      upstream.send(message);
+    });
+    upstream.onMessage((message) => {
+      const event: Event = JSON.parse(message.toString());
+      if (holdSync && event.type === "terminal.sync") {
+        releaseSync = () => socket.send(message);
+        return;
+      }
+      socket.send(message);
+    });
+  });
   try {
     await page.goto(origin);
     await observer.goto(origin);
@@ -974,7 +993,13 @@ test("language follows the device, persists across tabs, and keeps the terminal 
     ).toBeVisible();
     expect(sockets).toBe(connectedSockets);
     await page.getByRole("button", { name: "界面语言", exact: true }).click();
+    holdSync = true;
     await page.getByRole("button", { name: "English", exact: true }).click();
+    // Locale text can change the available terminal height (29 -> 28 -> 29
+    // rows in the failure trace). Force a geometry change as well so this test
+    // always exercises the delayed-resync boundary, independent of font metrics.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect.poll(() => !!releaseSync).toBe(true);
     await expect(
       page.getByRole("button", { name: "Terminal colors", exact: true }),
     ).toBeVisible();
@@ -985,7 +1010,27 @@ test("language follows the device, persists across tabs, and keeps the terminal 
       page.getByRole("button", { name: "Classic light", exact: true }),
     ).toBeVisible();
     await page.keyboard.press("Escape");
-    await page.locator(".xterm-helper-textarea").focus();
+    const input = page.locator(".xterm-helper-textarea");
+    await expect(
+      page.getByText("Syncing terminal…", { exact: true }),
+    ).toBeVisible();
+    await expect(input).not.toHaveAttribute("readonly", "");
+    await expect(input).toHaveAttribute("aria-readonly", "true");
+    const beforeBlockedInput = inputFrames;
+    await input.focus();
+    await page.keyboard.type("export LANGUAGE_PROBE=must_not_replay\n");
+    expect(inputFrames).toBe(beforeBlockedInput);
+    holdSync = false;
+    releaseSync!();
+    // Translation/menu visibility is not proof that the new geometry is ready.
+    // Wait for the actual lease and renderer boundary before sending the command.
+    await expect(
+      page.getByText("Connected · Input runs on your device", { exact: true }),
+    ).toBeVisible();
+    await expect(input).not.toHaveAttribute("readonly", "");
+    await expect(input).toHaveAttribute("aria-readonly", "false");
+    expect(inputFrames).toBe(beforeBlockedInput);
+    await input.focus();
     await page.keyboard.type("printf 'LANG_%s\\n' \"$LANGUAGE_PROBE\"\n");
     await expect(page.locator(".xterm-rows")).toContainText("LANG_alive");
     expect(sockets).toBe(connectedSockets);

@@ -76,6 +76,7 @@ async function sync(
   seq = "0",
   streamId = "stream",
   epoch = "epoch",
+  size = { cols: 80, rows: 24 },
 ) {
   await tick();
   const attach = socket.commands("terminal.attach").at(-1)!;
@@ -91,8 +92,7 @@ async function sync(
       seq,
       head: seq,
       revision: "0",
-      cols: 80,
-      rows: 24,
+      ...size,
       reset,
     },
   });
@@ -637,8 +637,15 @@ test("resize pauses readiness immediately and old output cannot re-enable input"
       type: "terminal.resync",
       payload: { sessionId: "s", streamId: "stream", reason: "resized" },
     });
-    await sync(socket, true, "0", "resized");
+    await sync(socket, true, "0", "resized", "epoch", { cols: 100, rows: 30 });
     snapshot(socket, "new-size", true, 0, "resized");
+    expect([h.term.cols, h.term.rows]).toEqual([100, 30]);
+    // Even an early lease cannot bypass a delayed renderer callback. Unsent
+    // keystrokes stay unsent after recovery instead of replaying into the shell.
+    lease(socket, "resized");
+    expect(h.writable.at(-1)).toBe(false);
+    h.connection.transmit("still-not-ready");
+    expect(socket.commands("terminal.input")).toHaveLength(0);
     h.term.finish();
     lease(socket, "resized");
     expect(h.writable.at(-1)).toBe(true);

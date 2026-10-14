@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@xterm/xterm@5.5.0':
+    hash: f9b7f687f09ca1e41ad28c3016062272c23060a955f77f9e12be1fa9c3c6d1e7
+    path: patches/@xterm__xterm@5.5.0.patch
+
 importers:
 
   .:
@@ -19,10 +24,10 @@ importers:
     dependencies:
       '@xterm/addon-fit':
         specifier: ^0.10.0
-        version: 0.10.0(@xterm/xterm@5.5.0)
+        version: 0.10.0(@xterm/xterm@5.5.0(patch_hash=f9b7f687f09ca1e41ad28c3016062272c23060a955f77f9e12be1fa9c3c6d1e7))
       '@xterm/xterm':
         specifier: ^5.5.0
-        version: 5.5.0
+        version: 5.5.0(patch_hash=f9b7f687f09ca1e41ad28c3016062272c23060a955f77f9e12be1fa9c3c6d1e7)
       lucide-react:
         specifier: ^0.468.0
         version: 0.468.0(react@19.3.0)
@@ -1024,11 +1029,11 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@xterm/addon-fit@0.10.0(@xterm/xterm@5.5.0)':
+  '@xterm/addon-fit@0.10.0(@xterm/xterm@5.5.0(patch_hash=f9b7f687f09ca1e41ad28c3016062272c23060a955f77f9e12be1fa9c3c6d1e7))':
     dependencies:
-      '@xterm/xterm': 5.5.0
+      '@xterm/xterm': 5.5.0(patch_hash=f9b7f687f09ca1e41ad28c3016062272c23060a955f77f9e12be1fa9c3c6d1e7)
 
-  '@xterm/xterm@5.5.0': {}
+  '@xterm/xterm@5.5.0(patch_hash=f9b7f687f09ca1e41ad28c3016062272c23060a955f77f9e12be1fa9c3c6d1e7)': {}
 
   baseline-browser-mapping@2.11.26: {}
 
