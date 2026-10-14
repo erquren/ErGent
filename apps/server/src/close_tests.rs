@@ -161,3 +161,20 @@ async fn failed_wait_is_not_replaced_by_late_acceptance() {
     assert_eq!(operation(&app).await.0, "unknown");
     assert_eq!(persisted(&app).await, session);
 }
+
+#[tokio::test]
+async fn lifecycle_guard_still_persists_non_lifecycle_metadata() {
+    let (_tmp, app, mut session) = fixture().await;
+    session.lifecycle = "exited".into();
+    session.exit_code = Some(7);
+    save_session(&app, &session).await.unwrap();
+    let mut metadata = session.clone();
+    metadata.lifecycle = "terminating".into();
+    metadata.exit_code = None;
+    metadata.cols = 132;
+    let canonical = save_session(&app, &metadata).await.unwrap();
+    assert_eq!(canonical.lifecycle, "exited");
+    assert_eq!(canonical.exit_code, Some(7));
+    assert_eq!(canonical.cols, 132);
+    assert_eq!(persisted(&app).await, canonical);
+}

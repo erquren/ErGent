@@ -235,7 +235,8 @@ async fn record_operation(
         .await?;
     Ok(())
 }
-async fn save_session(app: &App, session: &SessionInfo) -> Result<SessionInfo, ApiError> {
+async fn save_session(app: &App, incoming: &SessionInfo) -> Result<SessionInfo, ApiError> {
+    let mut session = incoming.clone();
     // Existing IDs may never move to another device.
     {
         let hub = app.hub.lock().await;
@@ -249,18 +250,20 @@ async fn save_session(app: &App, session: &SessionInfo) -> Result<SessionInfo, A
                 && (matches!(current.lifecycle.as_str(), "exited" | "lost")
                     || (current.lifecycle == "terminating" && session.lifecycle == "running"))
             {
-                return Ok(current.clone());
+                session.lifecycle = current.lifecycle.clone();
+                session.exit_code = current.exit_code;
             }
         }
     }
-    let data = serde_json::to_string(session).map_err(|_| ApiError::internal())?;
+    // Preserve lifecycle/exit monotonicity without discarding unrelated metadata.
+    let data = serde_json::to_string(&session).map_err(|_| ApiError::internal())?;
     sqlx::query("INSERT INTO terminal_sessions VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data WHERE machine_id=excluded.machine_id").bind(&session.id).bind(&session.machine_id).bind(data).execute(&app.db).await?;
     app.hub
         .lock()
         .await
         .sessions
         .insert(session.id.clone(), session.clone());
-    Ok(session.clone())
+    Ok(session)
 }
 async fn reconcile(
     app: &App,
