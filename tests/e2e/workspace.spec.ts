@@ -336,6 +336,27 @@ for (const mobile of [false, true]) {
       storageState: await api.storageState(),
     });
     const page = await context.newPage();
+    const recoveryFrames: unknown[] = [];
+    page.on("websocket", (ws) => {
+      for (const direction of ["framesent", "framereceived"] as const)
+        ws.on(direction, (frame) => {
+          try {
+            const event = JSON.parse(String(frame.payload));
+            if (
+              [
+                "terminal.attach",
+                "terminal.sync",
+                "terminal.resync",
+                "terminal.resize",
+                "terminal.lease.changed",
+              ].includes(event.type)
+            ) {
+              recoveryFrames.push({ direction, ...event });
+              if (recoveryFrames.length > 60) recoveryFrames.shift();
+            }
+          } catch {}
+        });
+    });
     const title = `Terminal fit ${mobile ? "mobile" : "desktop"}`;
     const response = await api.post(`/api/v1/machines/${machineId}/sessions`, {
       headers: { ...headers(), "Idempotency-Key": randomUUID() },
@@ -374,9 +395,23 @@ for (const mobile of [false, true]) {
         await page.locator(".xterm-helper-textarea").focus();
         // CUP clamps to the last row. Keep the prompt and cursor there too.
         await page.keyboard.type(`printf '\\033[999;1H${marker}'\n`);
-        await expect(page.locator(".xterm-rows > div").last()).toContainText(
-          marker,
-        );
+        try {
+          await expect(page.locator(".xterm-rows > div").last()).toContainText(
+            marker,
+          );
+        } catch (error) {
+          console.error(
+            "terminal resize diagnostics",
+            JSON.stringify({
+              height,
+              marker,
+              frames: recoveryFrames,
+              rows: await page.locator(".xterm-rows > div").allTextContents(),
+              status: await page.locator(".terminal-status").textContent(),
+            }),
+          );
+          throw error;
+        }
         await expect
           .poll(async () =>
             page.evaluate(() => {
@@ -1202,6 +1237,7 @@ for (const exitBeforeReply of [false, true]) {
     let ended = false;
     let streamId = "";
     let needsSnapshot = false;
+    let revision = 0;
     const inventory = (lifecycle: string) => {
       ended = lifecycle === "exited";
       const value = JSON.stringify({
@@ -1257,9 +1293,9 @@ for (const exitBeforeReply of [false, true]) {
                 epoch: session.agentEpoch,
                 seq: "0",
                 head: "0",
-                revision: "0",
-                cols: 80,
-                rows: 24,
+                revision: String(revision),
+                cols: session.cols,
+                rows: session.rows,
                 reset: true,
               },
             }),
@@ -1313,6 +1349,21 @@ for (const exitBeforeReply of [false, true]) {
               }),
             );
           }
+        }
+        if (command.type === "terminal.resize") {
+          session.cols = command.payload.cols;
+          session.rows = command.payload.rows;
+          revision++;
+          ws.send(
+            JSON.stringify({
+              type: "terminal.resync",
+              payload: {
+                sessionId: session.id,
+                streamId,
+                reason: "resized",
+              },
+            }),
+          );
         }
         if (command.type === "terminal.lease.claim")
           ws.send(
