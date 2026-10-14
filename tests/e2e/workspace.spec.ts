@@ -337,6 +337,7 @@ for (const mobile of [false, true]) {
     });
     const page = await context.newPage();
     const recoveryFrames: unknown[] = [];
+    let traceExpansion = false;
     page.on("websocket", (ws) => {
       for (const direction of ["framesent", "framereceived"] as const)
         ws.on(direction, (frame) => {
@@ -349,10 +350,29 @@ for (const mobile of [false, true]) {
                 "terminal.resync",
                 "terminal.resize",
                 "terminal.lease.changed",
-              ].includes(event.type)
+              ].includes(event.type) ||
+              (traceExpansion &&
+                [
+                  "terminal.snapshot",
+                  "terminal.input",
+                  "terminal.input.ack",
+                  "terminal.input.rejected",
+                ].includes(event.type)) ||
+              (traceExpansion &&
+                event.type === "terminal.output" &&
+                event.payload.dataBase64)
             ) {
-              recoveryFrames.push({ direction, ...event });
-              if (recoveryFrames.length > 60) recoveryFrames.shift();
+              recoveryFrames.push({
+                time: Date.now(),
+                direction,
+                ...event,
+                decoded: event.payload.dataBase64
+                  ? Buffer.from(event.payload.dataBase64, "base64").toString(
+                      "utf8",
+                    )
+                  : undefined,
+              });
+              if (recoveryFrames.length > 120) recoveryFrames.shift();
             }
           } catch {}
         });
@@ -380,6 +400,10 @@ for (const mobile of [false, true]) {
         compactHeight,
       ];
       for (const [index, height] of heights.entries()) {
+        if (index === 24) {
+          traceExpansion = true;
+          recoveryFrames.length = 0;
+        }
         await page.setViewportSize({ width, height });
         await page.evaluate(
           () =>
