@@ -1,12 +1,18 @@
 mod screen;
 mod tool_status;
+#[cfg(windows)]
+mod windows_process;
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ergent_protocol::{
     validate_size, AgentEvent, BrowserCommand, CreateTerminal, Event, SessionInfo, ToolEvent,
 };
 use parking_lot::Mutex;
-use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+#[cfg(not(windows))]
+type ProcessKiller = Box<dyn portable_pty::ChildKiller + Send + Sync>;
+#[cfg(windows)]
+type ProcessKiller = std::os::windows::io::OwnedHandle;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     io::{Read, Write},
@@ -38,7 +44,7 @@ struct Session {
     state: Arc<Mutex<State>>,
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
-    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    killer: Mutex<ProcessKiller>,
     close_lock: Mutex<()>,
     #[cfg(unix)]
     pid: Option<u32>,
@@ -56,7 +62,10 @@ impl Session {
                 }
             }
         }
+        #[cfg(not(windows))]
         self.killer.lock().kill()?;
+        #[cfg(windows)]
+        windows_process::terminate(&self.killer.lock())?;
         Ok(())
     }
 }
@@ -178,7 +187,10 @@ impl TerminalManager {
         drop(pair.slave);
         #[cfg(unix)]
         let pid = child.process_id();
+        #[cfg(not(windows))]
         let killer = child.clone_killer();
+        #[cfg(windows)]
+        let killer = windows_process::clone_handle(child.as_ref())?;
         let mut reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
         let info = SessionInfo {
@@ -672,7 +684,6 @@ mod tests {
         assert!(state.lock().lease.is_none());
     }
 
-    #[cfg(unix)]
     #[test]
     fn close_real_process_returns_acceptance_then_wait_confirms_exit() {
         let tmp = tempfile::tempdir().unwrap();
