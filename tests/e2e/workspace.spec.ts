@@ -829,6 +829,164 @@ test("language follows the device, persists across tabs, and keeps the terminal 
   }
 });
 
+test("name limits agree across enrollment, create, rename and the browser", async ({
+  browser,
+}) => {
+  const chinese = "中".repeat(120),
+    emoji = "😀".repeat(120);
+  const invalid = [
+    "中".repeat(121),
+    "😀".repeat(121),
+    "a\n",
+    "a\u0000b",
+    "a\u0085b",
+    "  ",
+  ];
+  const token = (
+    await (
+      await api.post("/api/v1/enrollments", { headers: headers(), data: {} })
+    ).json()
+  ).data.token;
+  const anon = await requestFactory.newContext({ baseURL: origin });
+  let enrolledId: string | undefined, sessionId: string | undefined;
+  const context = await browser.newContext({
+    locale: "zh-CN",
+    storageState: await api.storageState(),
+  });
+  try {
+    for (const name of invalid) {
+      expect(
+        (
+          await anon.post("/api/v1/agent/enroll", {
+            data: { enrollmentToken: token, name, os: "linux", arch: "x86_64" },
+          })
+        ).status(),
+      ).toBe(422);
+      expect(
+        (
+          await api.patch(`/api/v1/machines/${machineId}`, {
+            headers: headers(),
+            data: { name },
+          })
+        ).status(),
+      ).toBe(422);
+      expect(
+        (
+          await api.post(`/api/v1/machines/${machineId}/sessions`, {
+            headers: { ...headers(), "Idempotency-Key": randomUUID() },
+            data: { title: name, cwd: folder, cols: 80, rows: 24 },
+          })
+        ).status(),
+      ).toBe(422);
+    }
+    const enrolled = await anon.post("/api/v1/agent/enroll", {
+      data: {
+        enrollmentToken: token,
+        name: `　${chinese}　`,
+        os: "linux",
+        arch: "x86_64",
+      },
+    });
+    expect(enrolled.ok()).toBeTruthy();
+    enrolledId = (await enrolled.json()).data.machineId;
+    const machines = (await (await api.get("/api/v1/machines")).json()).data
+      .items;
+    expect(machines.find((m: { id: string }) => m.id === enrolledId).name).toBe(
+      chinese,
+    );
+    const created = await api.post(`/api/v1/machines/${machineId}/sessions`, {
+      headers: { ...headers(), "Idempotency-Key": randomUUID() },
+      data: { title: `　${emoji}　`, cwd: folder, cols: 80, rows: 24 },
+    });
+    expect(created.ok()).toBeTruthy();
+    const operation = (await created.json()).data;
+    sessionId = operation.sessionId;
+    await expect
+      .poll(
+        async () =>
+          (
+            await (
+              await api.get(`/api/v1/operations/${operation.operationId}`)
+            ).json()
+          ).data.status,
+      )
+      .toBe("succeeded");
+    const items = (
+      await (await api.get(`/api/v1/machines/${machineId}/sessions`)).json()
+    ).data.items;
+    expect(items.find((s: { id: string }) => s.id === sessionId).title).toBe(
+      emoji,
+    );
+    expect(
+      (
+        await api.patch(`/api/v1/sessions/${sessionId}`, {
+          headers: headers(),
+          data: { title: `　${chinese}　` },
+        })
+      ).ok(),
+    ).toBeTruthy();
+    for (const title of invalid)
+      expect(
+        (
+          await api.patch(`/api/v1/sessions/${sessionId}`, {
+            headers: headers(),
+            data: { title },
+          })
+        ).status(),
+      ).toBe(422);
+    expect(
+      (
+        await api.patch(`/api/v1/machines/${machineId}`, {
+          headers: headers(),
+          data: { name: `　${emoji}　` },
+        })
+      ).ok(),
+    ).toBeTruthy();
+    expect(
+      (
+        await api.patch(`/api/v1/machines/${machineId}`, {
+          headers: headers(),
+          data: { name: "Test Mac" },
+        })
+      ).ok(),
+    ).toBeTruthy();
+    const page = await context.newPage();
+    await page.goto(origin);
+    await page.getByRole("button", { name: "在 Test Mac 新建终端" }).click();
+    const input = page.getByLabel("终端名称");
+    await input.fill(emoji);
+    await expect(input).toHaveValue(emoji);
+    expect(
+      await input.evaluate((element: HTMLInputElement) =>
+        element.checkValidity(),
+      ),
+    ).toBe(true);
+    await input.fill(emoji + "😀");
+    expect(
+      await input.evaluate((element: HTMLInputElement) =>
+        element.checkValidity(),
+      ),
+    ).toBe(false);
+  } finally {
+    await context.close();
+    await anon.dispose();
+    await api.patch(`/api/v1/machines/${machineId}`, {
+      headers: headers(),
+      data: { name: "Test Mac" },
+    });
+    if (sessionId)
+      await api.post(`/api/v1/sessions/${sessionId}/close`, {
+        headers: { ...headers(), "Idempotency-Key": randomUUID() },
+        data: {},
+      });
+    if (enrolledId)
+      await api.post(`/api/v1/machines/${enrolledId}/revoke`, {
+        headers: headers(),
+        data: {},
+      });
+  }
+});
+
 test("authorization, CSRF, enrollment replay, and create idempotency", async () => {
   const anon = await requestFactory.newContext({ baseURL: origin });
   expect((await anon.get("/api/v1/machines")).status()).toBe(401);

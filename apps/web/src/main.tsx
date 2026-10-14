@@ -37,6 +37,7 @@ import { useAppearance, terminalTheme, terminalThemes } from "./theme";
 import { GlassPopover } from "./GlassPopover";
 import "./glass.css";
 import { toolLabel } from "./tool-status";
+import { normalizeName, nameValidationMessage } from "./names";
 
 function App() {
   const { preference, setPreference } = useLanguage();
@@ -312,7 +313,7 @@ function App() {
       const result = await api<{ operationId: string; sessionId: string }>(
         `/machines/${machineId}/sessions`,
         "POST",
-        { title, cwd, cols: 120, rows: 36 },
+        { title: normalizeName(title), cwd, cols: 120, rows: 36 },
         randomId(),
       );
       setModal(null);
@@ -338,7 +339,7 @@ function App() {
       const result = await api<{ id: string; name: string }>(
         `/machines/${machineId}`,
         "PATCH",
-        { name: deviceName },
+        { name: normalizeName(deviceName) },
       );
       setMachines((items) =>
         items.map((m) =>
@@ -350,7 +351,7 @@ function App() {
   const renameTerminal = () =>
     act(async () => {
       await api(`/sessions/${editingSession}`, "PATCH", {
-        title: terminalName,
+        title: normalizeName(terminalName),
       });
       setModal(null);
     });
@@ -1080,9 +1081,13 @@ function App() {
                   <input
                     autoFocus
                     required
-                    maxLength={120}
                     value={terminalName}
-                    onChange={(e) => setTerminalName(e.target.value)}
+                    onChange={(e) => {
+                      setTerminalName(e.target.value);
+                      e.target.setCustomValidity(
+                        t(nameValidationMessage(e.target.value)),
+                      );
+                    }}
                   />
                 </label>
                 <p className="form-note">
@@ -1107,9 +1112,13 @@ function App() {
                   <input
                     autoFocus
                     required
-                    maxLength={120}
                     value={deviceName}
-                    onChange={(e) => setDeviceName(e.target.value)}
+                    onChange={(e) => {
+                      setDeviceName(e.target.value);
+                      e.target.setCustomValidity(
+                        t(nameValidationMessage(e.target.value)),
+                      );
+                    }}
                   />
                 </label>
                 <p className="form-note">
@@ -1152,8 +1161,12 @@ function App() {
                   {t("终端名称")}
                   <input
                     value={title}
-                    maxLength={120}
-                    onChange={(e) => setTitle(e.target.value)}
+                    onChange={(e) => {
+                      setTitle(e.target.value);
+                      e.target.setCustomValidity(
+                        t(nameValidationMessage(e.target.value)),
+                      );
+                    }}
                     required
                   />
                 </label>
