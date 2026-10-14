@@ -24,7 +24,7 @@ struct Lease {
 }
 struct State {
     info: SessionInfo,
-    parser: vt100::Parser,
+    parser: Option<vt100::Parser>,
     seq: u64,
     viewers: HashSet<String>,
     lease: Option<Lease>,
@@ -36,6 +36,9 @@ struct Session {
     event_token: String,
     config: CreateTerminal,
     state: Arc<Mutex<State>>,
+    resources: Mutex<Option<Arc<Resources>>>,
+}
+struct Resources {
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
@@ -44,16 +47,24 @@ struct Session {
 }
 impl Session {
     fn kill(&self) -> Result<()> {
+        let resources = self.resources.lock().clone();
+        let Some(resources) = resources else {
+            return Ok(());
+        };
         #[cfg(unix)]
-        if let Some(pid) = self.pid {
+        if let Some(pid) = resources.pid {
             // Only kill the dedicated PTY process group, never our own or an unrelated group.
             unsafe {
-                if libc::getpgid(pid as i32) == pid as i32 {
-                    libc::killpg(pid as i32, libc::SIGKILL);
+                if libc::getpgid(pid as i32) == pid as i32
+                    && libc::killpg(pid as i32, libc::SIGKILL) == 0
+                {
+                    // The dedicated group (including its leader) was signalled.
+                    // A redundant second kill can race reaping and report ESRCH.
+                    return Ok(());
                 }
             }
         }
-        self.killer.lock().kill()?;
+        resources.killer.lock().kill()?;
         Ok(())
     }
 }
@@ -133,9 +144,6 @@ impl TerminalManager {
     pub fn create(&self, id: &str, mut config: CreateTerminal) -> Result<SessionInfo> {
         config.validate().map_err(|e| anyhow!(e))?;
         config.title = config.title.trim().to_owned();
-        if !Path::new(&config.cwd).is_absolute() || !Path::new(&config.cwd).is_dir() {
-            bail!("工作目录必须是存在的绝对路径");
-        }
         let mut sessions = self.sessions.lock();
         if let Some(session) = sessions.get(id) {
             if session.config != config {
@@ -143,14 +151,18 @@ impl TerminalManager {
             }
             return Ok(session.state.lock().info.clone());
         }
-        if sessions.len() >= 1000
-            || sessions
-                .values()
-                .filter(|s| s.state.lock().info.lifecycle == "running")
-                .count()
-                >= 20
+        // History retains metadata and the original config for idempotency. Only live
+        // runtimes consume capacity, including a process whose termination is pending.
+        if sessions
+            .values()
+            .filter(|s| s.state.lock().parser.is_some())
+            .count()
+            >= 20
         {
             bail!("已达到会话上限");
+        }
+        if !Path::new(&config.cwd).is_absolute() || !Path::new(&config.cwd).is_dir() {
+            bail!("工作目录必须是存在的绝对路径");
         }
         let shell = default_shell();
         let pair = native_pty_system().openpty(size(config.cols, config.rows))?;
@@ -178,6 +190,17 @@ impl TerminalManager {
         let pid = child.process_id();
         let killer = child.clone_killer();
         let mut reader = pair.master.try_clone_reader()?;
+        #[cfg(unix)]
+        let poll_fd = {
+            use std::os::fd::BorrowedFd;
+            let fd = pair
+                .master
+                .as_raw_fd()
+                .context("PTY has no readable descriptor")?;
+            // The master remains owned here; the duplicate keeps poll's descriptor
+            // valid even when the wait thread releases the master after shell exit.
+            unsafe { BorrowedFd::borrow_raw(fd) }.try_clone_to_owned()?
+        };
         let writer = pair.master.take_writer()?;
         let info = SessionInfo {
             id: id.into(),
@@ -191,11 +214,12 @@ impl TerminalManager {
             cols: config.cols,
             rows: config.rows,
             exit_code: None,
+            output_truncated: false,
             tool_status: None,
         };
         let state = Arc::new(Mutex::new(State {
             info: info.clone(),
-            parser: vt100::Parser::new(config.rows, config.cols, 0),
+            parser: Some(vt100::Parser::new(config.rows, config.cols, 0)),
             seq: 0,
             viewers: HashSet::new(),
             lease: None,
@@ -207,23 +231,67 @@ impl TerminalManager {
             event_token,
             config,
             state: state.clone(),
-            writer: Mutex::new(writer),
-            master: Mutex::new(pair.master),
-            killer: Mutex::new(killer),
-            #[cfg(unix)]
-            pid,
+            resources: Mutex::new(Some(Arc::new(Resources {
+                writer: Mutex::new(writer),
+                master: Mutex::new(pair.master),
+                killer: Mutex::new(killer),
+                #[cfg(unix)]
+                pid,
+            }))),
         });
-        sessions.insert(id.into(), session);
+        sessions.insert(id.into(), session.clone());
         let events = self.events.clone();
         let read_state = state.clone();
+        #[cfg(unix)]
+        let exited_at = Arc::new(Mutex::new(None::<Instant>));
+        #[cfg(unix)]
+        let read_exited_at = exited_at.clone();
+        let (reader_done, reader_finished) = std::sync::mpsc::sync_channel(1);
         std::thread::spawn(move || {
             let mut buffer = [0u8; 8192];
-            loop {
+            let complete = loop {
+                #[cfg(unix)]
+                {
+                    use std::os::fd::AsRawFd;
+                    let exited_at = *read_exited_at.lock();
+                    if exited_at.is_some_and(|at| at.elapsed() >= Duration::from_secs(2)) {
+                        break false;
+                    }
+                    let mut descriptor = libc::pollfd {
+                        fd: poll_fd.as_raw_fd(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    // Drain queued tail output before releasing a reader whose slave may
+                    // still be held by descendants. Quiet after shell exit is a boundary.
+                    let ready = unsafe { libc::poll(&mut descriptor, 1, 100) };
+                    if ready == 0 {
+                        if exited_at.is_some() {
+                            break true;
+                        }
+                        continue;
+                    }
+                    if ready < 0 {
+                        if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+                        {
+                            continue;
+                        }
+                        break false;
+                    }
+                }
                 match reader.read(&mut buffer) {
-                    Ok(0) => break,
+                    Ok(0) => break true,
                     Ok(n) => {
                         let mut s = read_state.lock();
-                        s.parser.process(&buffer[..n]);
+                        let Some(parser) = s.parser.as_mut() else {
+                            // ConPTY close can wait for its output pipe to drain. Continue
+                            // draining (without retaining a screen) until it closes that pipe.
+                            #[cfg(windows)]
+                            continue;
+                            #[cfg(not(windows))]
+                            break false;
+                        };
+                        parser.process(&buffer[..n]);
                         s.seq += 1;
                         let data = STANDARD.encode(&buffer[..n]);
                         for viewer in &s.viewers {
@@ -238,18 +306,54 @@ impl TerminalManager {
                         }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(_) => break,
+                    #[cfg(unix)]
+                    Err(e) if e.raw_os_error() == Some(libc::EIO) => break true,
+                    Err(e) => {
+                        break matches!(
+                            e.kind(),
+                            std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::UnexpectedEof
+                        )
+                    }
                 }
-            }
+            };
+            let _ = reader_done.send(complete);
         });
         let events = self.events.clone();
         std::thread::spawn(move || {
             let exit = child.wait();
+            let exited = exit.is_ok();
+            let drained = if exited {
+                #[cfg(unix)]
+                {
+                    *exited_at.lock() = Some(Instant::now());
+                }
+                // In particular, ClosePseudoConsole must run without the reader's
+                // state lock: it can synchronously wait for that reader to drain.
+                let resources = session.resources.lock().take();
+                drop(resources);
+                reader_finished
+                    .recv_timeout(Duration::from_secs(3))
+                    .unwrap_or(false)
+            } else {
+                false
+            };
             let mut s = state.lock();
             s.info.lifecycle = "exited".into();
             s.info.exit_code = exit.ok().map(|v| v.exit_code());
+            s.info.output_truncated = exited && !drained;
             s.lease = None;
+            // Reclaim only after confirmed exit. A wait error must retain the runtime
+            // so it still counts against capacity and can be killed at shutdown.
+            if exited {
+                s.parser = None;
+                s.inputs = VecDeque::new();
+                s.tool_events = VecDeque::new();
+                s.tool_turns = VecDeque::new();
+            }
             for viewer in &s.viewers {
+                if exited && !drained {
+                    send(&events, viewer, Event::error("OUTPUT_TRUNCATED", "Terminal exited before all output could be drained; final output may be incomplete."));
+                }
                 send(
                     &events,
                     viewer,
@@ -260,6 +364,7 @@ impl TerminalManager {
                     },
                 );
             }
+            s.viewers = HashSet::new();
             let _ = events.send(AgentEvent::Session {
                 session: s.info.clone(),
             });
@@ -329,7 +434,11 @@ impl TerminalManager {
                     bail!("观看者数量已达上限");
                 }
                 // Snapshot + subscription registration share the reader lock: no output can slip between them.
-                let data = screen::snapshot(s.parser.screen());
+                let parser = s
+                    .parser
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("terminal has exited"))?;
+                let data = screen::snapshot(parser.screen());
                 let chunks: Vec<_> = data.chunks(16 * 1024).collect();
                 for (i, chunk) in chunks.iter().enumerate() {
                     send(
@@ -429,7 +538,12 @@ impl TerminalManager {
                 // A blocking PTY write must never hold the screen lock: the reader
                 // needs it to keep draining output, including echoed pasted input.
                 drop(s);
-                session.writer.lock().write_all(&bytes)?;
+                let resources = session
+                    .resources
+                    .lock()
+                    .clone()
+                    .ok_or_else(|| anyhow!("terminal has exited"))?;
+                resources.writer.lock().write_all(&bytes)?;
                 let mut s = session.state.lock();
                 if let Some((_, _, written)) = s
                     .inputs
@@ -448,8 +562,16 @@ impl TerminalManager {
             } => {
                 check_lease(&s, viewer, &lease_id)?;
                 validate_size(cols, rows).map_err(|e| anyhow!(e))?;
-                session.master.lock().resize(size(cols, rows))?;
-                s.parser.set_size(rows, cols);
+                let resources = session
+                    .resources
+                    .lock()
+                    .clone()
+                    .ok_or_else(|| anyhow!("terminal has exited"))?;
+                resources.master.lock().resize(size(cols, rows))?;
+                s.parser
+                    .as_mut()
+                    .ok_or_else(|| anyhow!("terminal has exited"))?
+                    .set_size(rows, cols);
                 s.info.cols = cols;
                 s.info.rows = rows;
             }
@@ -460,7 +582,7 @@ impl TerminalManager {
 impl Drop for TerminalManager {
     fn drop(&mut self) {
         for session in self.sessions.lock().values() {
-            if session.state.lock().info.lifecycle == "running" {
+            if session.resources.lock().is_some() {
                 let _ = session.kill();
             }
         }
@@ -634,6 +756,8 @@ mod tests {
                 .state
                 .lock()
                 .parser
+                .as_ref()
+                .unwrap()
                 .screen()
                 .contents()
                 .contains("ERGENT_READY")
@@ -647,3 +771,6 @@ mod tests {
         manager.close("s").unwrap();
     }
 }
+
+#[cfg(test)]
+mod history_tests;

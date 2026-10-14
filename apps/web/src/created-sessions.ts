@@ -9,10 +9,14 @@ function preserveLifecycle(
   current: SessionInfo | undefined,
   next: SessionInfo,
 ): SessionInfo {
+  if (current?.agentEpoch !== next.agentEpoch) return next;
+  next = {
+    ...next,
+    outputTruncated: current.outputTruncated || next.outputTruncated,
+  };
   if (
-    current?.agentEpoch === next.agentEpoch &&
-    (["exited", "lost"].includes(current.lifecycle) ||
-      (current.lifecycle === "terminating" && next.lifecycle === "running"))
+    ["exited", "lost"].includes(current.lifecycle) ||
+    (current.lifecycle === "terminating" && next.lifecycle === "running")
   )
     return {
       ...next,
@@ -70,6 +74,7 @@ export class CreatedSessions {
               ...current,
               lifecycle: lifecycle.lifecycle,
               exitCode: lifecycle.exitCode,
+              outputTruncated: lifecycle.outputTruncated,
             }
           : current;
     }

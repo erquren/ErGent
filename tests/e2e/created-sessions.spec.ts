@@ -23,6 +23,7 @@ const session: SessionInfo = {
   cols: 80,
   rows: 24,
   exitCode: null,
+  outputTruncated: false,
   toolStatus: null,
 };
 
@@ -108,4 +109,19 @@ test("new inventory metadata cannot reverse a same-epoch terminating or exited l
   expect(
     tracker.receive([machine], [{ ...session, lifecycle: "terminating" }]),
   ).toEqual([]);
+});
+
+test("truncation survives stale same-epoch HTTP results and inventories but not a new epoch", () => {
+  const tracker = new CreatedSessions();
+  tracker.receive([machine], [session]);
+  const exited = { ...session, lifecycle: "exited", exitCode: 0 };
+  expect(
+    tracker.observe({ ...exited, outputTruncated: true })?.outputTruncated,
+  ).toBe(true);
+  expect(tracker.observe(exited)?.outputTruncated).toBe(true);
+  tracker.receive([machine], [exited]);
+  expect(tracker.observe(session)?.outputTruncated).toBe(true);
+  const nextEpoch = { ...session, agentEpoch: "new-epoch" };
+  expect(tracker.receive([machine], [nextEpoch])).toEqual([nextEpoch]);
+  expect(tracker.observe(exited)).toEqual(nextEpoch);
 });

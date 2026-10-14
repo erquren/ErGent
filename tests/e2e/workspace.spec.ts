@@ -9,6 +9,7 @@ import { mkdtempSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import type { Event } from "../../packages/protocol-ts";
 
 const root = process.cwd(),
   port = 17779,
@@ -218,19 +219,40 @@ test("create selects its result before delayed inventory arrives", async ({
   });
   const page = await context.newPage();
   let holdInventory = false;
-  let initialInventory: string | Buffer | undefined;
-  const held: (string | Buffer)[] = [];
-  let deliver: ((message: string | Buffer) => void) | undefined;
+  type Chunk = Extract<Event, { type: "inventory.chunk" }>;
+  let initialInventory: Chunk[] | undefined;
+  const held: Chunk[][] = [];
+  let deliver: ((inventory: Chunk[]) => void) | undefined;
   await page.routeWebSocket("**/api/v1/ws/browser", (socket) => {
     const upstream = socket.connectToServer();
-    deliver = (message) => socket.send(message);
+    let pending: Chunk[] = [];
+    let nextTransfer = 1n;
+    initialInventory = undefined;
+    held.length = 0;
+    // The fixture delays logical snapshots, not partial wire transfers. Each
+    // delivery (including a stale snapshot) needs a fresh connection-local ID.
+    deliver = (inventory) => {
+      const transferId = (nextTransfer++).toString();
+      for (const chunk of inventory)
+        socket.send(
+          JSON.stringify({
+            ...chunk,
+            payload: { ...chunk.payload, transferId },
+          }),
+        );
+    };
     upstream.onMessage((message) => {
-      if (JSON.parse(message.toString()).type === "inventory.sync") {
-        initialInventory ??= message;
-        if (holdInventory) {
-          held.push(message);
-          return;
-        }
+      const event: Event = JSON.parse(message.toString());
+      if (event.type === "inventory.chunk") {
+        expect(event.payload.index).toBe(pending.length);
+        pending.push(event);
+        if (!event.payload.last) return;
+        const inventory = pending;
+        pending = [];
+        initialInventory ??= inventory;
+        if (holdInventory) held.push(inventory);
+        else deliver!(inventory);
+        return;
       }
       socket.send(message);
     });
@@ -262,7 +284,7 @@ test("create selects its result before delayed inventory arrives", async ({
     ).toBeVisible();
     await expect.poll(() => held.length).toBeGreaterThan(0);
     holdInventory = false;
-    for (const message of held) deliver!(message);
+    for (const inventory of held.splice(0)) deliver!(inventory);
     await expect(
       page
         .locator(".session-card")
@@ -1158,7 +1180,7 @@ test("cross-user isolation, agent restart, close, and device revocation", async 
       Upgrade: "websocket",
       "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
       "Sec-WebSocket-Version": "13",
-      "Sec-WebSocket-Protocol": "ergent.preview.v1",
+      "Sec-WebSocket-Protocol": "ergent.preview.v2",
     },
   });
   expect(badOrigin.status()).toBe(403);
@@ -1244,7 +1266,7 @@ test("cross-user isolation, agent restart, close, and device revocation", async 
       Upgrade: "websocket",
       "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
       "Sec-WebSocket-Version": "13",
-      "Sec-WebSocket-Protocol": "ergent.preview.v1",
+      "Sec-WebSocket-Protocol": "ergent.preview.v2",
     },
   });
   expect(reconnect.status()).toBe(401);
