@@ -658,7 +658,12 @@ p {
   padding: 14px 16px 0;
   overflow: hidden;
 }
-.terminal-canvas .xterm {
+/* FitAddon measures xterm's parent; keep its host free of padding. */
+.terminal-host {
+  width: 100%;
+  height: 100%;
+}
+.terminal-host .xterm {
   height: 100%;
 }
 .terminal-status {
