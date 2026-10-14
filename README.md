@@ -49,7 +49,7 @@ python3 scripts/dev.py
 
 - 终端以 Agent 当前用户的权限运行。不自动安装或登录 AI CLI。
 - 公网部署使用 HTTPS 反向代理，并设置正确的 `--origin`；跨机器 Agent 连接必须使用 HTTPS。不要在公网启用 `--allow-any-origin`。
-- 同一来源 IP 累计 3 次登录失败后会永久封禁，成功登录或重启不会清零。可用 `ergent-server --database .local/server.db login-unblock IP` 解封。代理部署需配置 `--trusted-proxy`，并由代理覆盖 `X-Real-IP`。
+- 登录按来源 IP 使用时间窗口和指数退避：默认 15 分钟内第 5 次失败后等待 30 秒，继续失败逐次翻倍，单次最多 15 分钟。成功登录清零；重启保留尚未到期的限制。可用 `ergent-server --database .local/server.db login-unblock IP --actor 操作人 --reason 原因` 解锁并记录审计。配置、升级和审计查询见 [发布包使用说明](scripts/release/README.md#登录保护与审计)。代理部署需配置 `--trusted-proxy`，并由代理覆盖 `X-Real-IP`。
 - 关闭网页不结束终端；Agent 或机器重启后不能恢复原进程。断线期间的完整滚动历史不持久化，更新前请保存工作并备份数据。
 - 发布包为可解压运行的程序，未配置 Windows 签名或 macOS 签名、公证。平台要求和部署细节见 [发布包使用说明](scripts/release/README.md)。
 
