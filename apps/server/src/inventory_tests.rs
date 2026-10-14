@@ -209,13 +209,12 @@ async fn database_failure_rolls_back_full_inventory() {
 #[test]
 fn legacy_peers_fail_negotiation_explicitly() {
     let mut headers = HeaderMap::new();
-    headers.insert(
-        "sec-websocket-protocol",
-        "ergent.preview.v1".parse().unwrap(),
-    );
-    let error = protocol(&headers).unwrap_err();
-    assert_eq!(error.status, StatusCode::UPGRADE_REQUIRED);
-    assert_eq!(error.code, "PROTOCOL_UNSUPPORTED");
+    for legacy in ["ergent.preview.v1", "ergent.preview.v2"] {
+        headers.insert("sec-websocket-protocol", legacy.parse().unwrap());
+        let error = protocol(&headers).unwrap_err();
+        assert_eq!(error.status, StatusCode::UPGRADE_REQUIRED);
+        assert_eq!(error.code, "PROTOCOL_UNSUPPORTED");
+    }
     headers.insert("sec-websocket-protocol", SUBPROTOCOL.parse().unwrap());
     assert!(protocol(&headers).is_ok());
 }

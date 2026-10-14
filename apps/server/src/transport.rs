@@ -151,7 +151,7 @@ async fn agent_socket(app: App, mut socket: WebSocket, machine: String, owner: S
                                 Err(_) => break,
                             }
                         }
-                        // v2 inventories must use the bounded transfer, even when small.
+                        // Inventory messages must use the bounded transfer, even when small.
                         AgentEvent::Hello { .. } | AgentEvent::Inventory { .. } => break,
                         event => { if inventory.in_progress() { break; } event }
                     };
@@ -181,7 +181,7 @@ async fn agent_socket(app: App, mut socket: WebSocket, machine: String, owner: S
                         AgentEvent::Viewer { viewer_id, event } => {
                             let hub=app.hub.lock().await;
                             if let Some(viewer)=hub.viewers.get(&viewer_id).filter(|v|v.owner==owner) {
-                                let session=match &event { Event::Snapshot { session_id,.. }|Event::Output {session_id,..}|Event::Lease{session_id,..}=>Some(session_id),_=>None };
+                                let session=match &event { Event::Unavailable { session_id,.. }|Event::InputRejected { session_id,.. }|Event::Ended { session_id,.. }|Event::Sync { session_id,.. }|Event::Resync { session_id,.. }|Event::Snapshot { session_id,.. }|Event::Output {session_id,..}|Event::Lease{session_id,..}=>Some(session_id),_=>None };
                                 let allowed=match session { Some(s)=>viewer.session.as_ref()==Some(s)&&hub.sessions.get(s).is_some_and(|s|s.machine_id==machine),None=>matches!(event,Event::InputAck{..}|Event::Error{..}) };
                                 if allowed { deliver(viewer,event); }
                             }
@@ -199,6 +199,18 @@ async fn agent_socket(app: App, mut socket: WebSocket, machine: String, owner: S
             .is_some_and(|a| a.connection == connection)
         {
             hub.agents.remove(&machine);
+            // The agent invalidates viewer registrations and leases on reconnect.
+            // Reconnect affected browser transports so their terminal controllers
+            // reattach from an applied cursor, even when no further PTY byte arrives.
+            for viewer in hub.viewers.values().filter(|viewer| {
+                viewer
+                    .session
+                    .as_ref()
+                    .and_then(|id| hub.sessions.get(id))
+                    .is_some_and(|session| session.machine_id == machine)
+            }) {
+                let _ = viewer.stop.send(true);
+            }
         } else {
             // A replaced connection must not invalidate the replacement's operations.
             return;

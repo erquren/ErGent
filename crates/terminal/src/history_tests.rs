@@ -95,7 +95,11 @@ fn more_than_one_thousand_historical_sessions_do_not_consume_live_capacity() {
                 state: Arc::new(Mutex::new(State {
                     info,
                     parser: None,
-                    seq: 0,
+                    recovery: recovery::Recovery::new(),
+                    streams: HashMap::new(),
+                    final_seq: Some(0),
+                    final_snapshot: None,
+                    output_deadline: None,
                     viewers: HashSet::new(),
                     lease: None,
                     tool_events: VecDeque::new(),
@@ -189,6 +193,12 @@ fn natural_exit_publishes_large_tail_before_exit_and_runtime_reclamation() {
             "viewer",
             BrowserCommand::Attach {
                 session_id: "tail".into(),
+                request_id: "tail".into(),
+                epoch: None,
+                seq: None,
+                revision: None,
+                cols: None,
+                rows: None,
             },
         )
         .unwrap();
@@ -204,46 +214,127 @@ fn natural_exit_publishes_large_tail_before_exit_and_runtime_reclamation() {
             b"exec sh -c 'head -c 131072 /dev/zero | tr \"\\000\" x; printf FINAL_%s SENTINEL'\r",
         )
         .unwrap();
+    // Pause this viewer entirely until after child exit and reader completion.
+    // The final replay must survive PTY/runtime reclamation and a stalled renderer.
+    wait_for_exit(&manager, "tail");
+    assert!(session.resources.lock().is_none());
+    assert!(session.state.lock().parser.is_none());
+    assert!(session.state.lock().final_snapshot.is_some());
+    let (stream, mut seq) = {
+        let state = session.state.lock();
+        let stream = &state.streams["viewer"];
+        (stream.id.clone(), stream.seq)
+    };
+    // Discard notifications that preceded our deliberately delayed pulls.
+    while events.try_recv().is_ok() {}
     let mut output = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        assert!(
-            Instant::now() < deadline,
-            "tail-producing shell did not exit"
-        );
-        match events.try_recv() {
-            Ok(AgentEvent::Viewer {
-                event: Event::Output { data_base64, .. },
+        manager
+            .handle(
+                "viewer",
+                BrowserCommand::Pull {
+                    session_id: "tail".into(),
+                    stream_id: stream.clone(),
+                    seq: seq.to_string(),
+                },
+            )
+            .unwrap();
+        let AgentEvent::Viewer { event, .. } = events.try_recv().unwrap() else {
+            panic!("expected viewer response");
+        };
+        match event {
+            Event::Snapshot { .. } => {}
+            Event::Output {
+                seq: next,
+                data_base64,
                 ..
-            }) => {
+            } => {
                 output.extend(STANDARD.decode(data_base64).unwrap());
+                seq = next.parse().unwrap();
+                // Even after sending the last bytes, they remain until the NEXT
+                // pull acknowledges xterm's completion callback.
+                if seq == session.state.lock().final_seq.unwrap() {
+                    assert!(session.state.lock().final_snapshot.is_some());
+                }
             }
-            Ok(AgentEvent::Viewer {
-                event: Event::Error { code, .. },
+            Event::Ended {
+                complete: true,
+                available: true,
                 ..
-            }) => {
-                assert_ne!(code, "OUTPUT_TRUNCATED");
-            }
-            Ok(AgentEvent::Session { session }) if session.lifecycle == "exited" => break,
-            Ok(_) => {}
-            Err(broadcast::error::TryRecvError::Empty) => {
-                std::thread::sleep(Duration::from_millis(1))
-            }
-            Err(error) => panic!("output stream lost events: {error}"),
+            } => break,
+            other => panic!("unexpected recovery event: {other:?}"),
         }
     }
-    assert!(
-        output
-            .strip_suffix(b"\r\n")
-            .unwrap_or(&output)
-            .ends_with(b"FINAL_SENTINEL"),
-        "exit was published before the last output: {:?}",
-        String::from_utf8_lossy(&output[output.len().saturating_sub(300)..])
-    );
+    assert!(output
+        .strip_suffix(b"\r\n")
+        .unwrap_or(&output)
+        .ends_with(b"FINAL_SENTINEL"));
     assert!(output
         .windows(131072)
         .any(|bytes| bytes.iter().all(|b| *b == b'x')));
-    assert!(session.resources.lock().is_none());
-    assert!(session.state.lock().parser.is_none());
+    assert!(session.state.lock().final_snapshot.is_none());
+    assert!(!session.state.lock().recovery.contains(0));
     assert!(!session.state.lock().info.output_truncated);
+}
+
+#[test]
+fn final_recovery_expires_visibly_without_retaining_runtime_capacity() {
+    let tmp = tempfile::tempdir().unwrap();
+    let manager = TerminalManager::new("machine".into(), "epoch".into());
+    let config = CreateTerminal {
+        title: "retained".into(),
+        cwd: tmp.path().to_string_lossy().into(),
+        cols: 80,
+        rows: 24,
+    };
+    manager.create("finished", config.clone()).unwrap();
+    manager
+        .handle(
+            "viewer",
+            BrowserCommand::Attach {
+                session_id: "finished".into(),
+                request_id: "retention".into(),
+                epoch: None,
+                seq: None,
+                revision: None,
+                cols: None,
+                rows: None,
+            },
+        )
+        .unwrap();
+    exit_naturally(&manager, "finished");
+    let session = manager.get("finished").unwrap();
+    assert!(session.state.lock().final_snapshot.is_some());
+    // The retained final surface must not occupy one of the 20 live PTY slots.
+    for i in 0..20 {
+        manager.create(&format!("new-{i}"), config.clone()).unwrap();
+    }
+    assert!(manager.create("over-capacity", config).is_err());
+    let mut events = manager.events();
+    session.state.lock().output_deadline = Some(Instant::now());
+    manager.expire_leases();
+    let mut unavailable = false;
+    let mut persisted = false;
+    while let Ok(event) = events.try_recv() {
+        match event {
+            AgentEvent::Viewer {
+                event: Event::Ended {
+                    available: false, ..
+                },
+                ..
+            } => unavailable = true,
+            AgentEvent::Session { session }
+                if session.id == "finished" && session.output_truncated =>
+            {
+                persisted = true
+            }
+            _ => {}
+        }
+    }
+    assert!(unavailable && persisted);
+    assert!(session.state.lock().final_snapshot.is_none());
+    assert!(session.resources.lock().is_none());
+    for i in 0..20 {
+        exit_naturally(&manager, &format!("new-{i}"));
+    }
 }

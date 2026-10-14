@@ -4,7 +4,7 @@ use inventory::InventoryChunk;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-pub const SUBPROTOCOL: &str = "ergent.preview.v2";
+pub const SUBPROTOCOL: &str = "ergent.preview.v3";
 pub const MAX_MESSAGE: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize, TS, PartialEq)]
@@ -163,6 +163,22 @@ pub enum BrowserCommand {
     Attach {
         #[serde(rename = "sessionId")]
         session_id: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        epoch: Option<String>,
+        seq: Option<String>,
+        revision: Option<String>,
+        cols: Option<u16>,
+        rows: Option<u16>,
+    },
+    /// One response per pull; the next pull acknowledges that xterm applied it.
+    #[serde(rename = "terminal.pull")]
+    Pull {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "streamId")]
+        stream_id: String,
+        seq: String,
     },
     #[serde(rename = "terminal.detach")]
     Detach {
@@ -173,6 +189,8 @@ pub enum BrowserCommand {
     Claim {
         #[serde(rename = "sessionId")]
         session_id: String,
+        #[serde(rename = "streamId")]
+        stream_id: String,
         force: bool,
     },
     #[serde(rename = "terminal.lease.renew")]
@@ -206,7 +224,8 @@ pub enum BrowserCommand {
 impl BrowserCommand {
     pub fn session_id(&self) -> &str {
         match self {
-            Self::Attach { session_id }
+            Self::Attach { session_id, .. }
+            | Self::Pull { session_id, .. }
             | Self::Detach { session_id }
             | Self::Claim { session_id, .. }
             | Self::Renew { session_id, .. }
@@ -226,13 +245,31 @@ pub enum Event {
         machines: Vec<MachineInfo>,
         sessions: Vec<SessionInfo>,
     },
+    #[serde(rename = "terminal.sync")]
+    Sync {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "streamId")]
+        stream_id: String,
+        epoch: String,
+        seq: String,
+        head: String,
+        revision: String,
+        cols: u16,
+        rows: u16,
+        reset: bool,
+    },
     #[serde(rename = "terminal.snapshot")]
     Snapshot {
         #[serde(rename = "sessionId")]
         session_id: String,
+        #[serde(rename = "streamId")]
+        stream_id: String,
+        epoch: String,
         seq: String,
-        cols: u16,
-        rows: u16,
+        index: u32,
         first: bool,
         last: bool,
         #[serde(rename = "dataBase64")]
@@ -242,14 +279,55 @@ pub enum Event {
     Output {
         #[serde(rename = "sessionId")]
         session_id: String,
+        #[serde(rename = "streamId")]
+        stream_id: String,
+        epoch: String,
+        from: String,
         seq: String,
         #[serde(rename = "dataBase64")]
         data_base64: String,
+    },
+    #[serde(rename = "terminal.resync")]
+    Resync {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "streamId")]
+        stream_id: String,
+        reason: String,
+    },
+    #[serde(rename = "terminal.ended")]
+    Ended {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "streamId")]
+        stream_id: String,
+        epoch: String,
+        seq: String,
+        complete: bool,
+        available: bool,
+        truncated: bool,
+    },
+    #[serde(rename = "terminal.unavailable")]
+    Unavailable {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    #[serde(rename = "terminal.input.rejected")]
+    InputRejected {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "inputId")]
+        input_id: String,
+        message: String,
     },
     #[serde(rename = "terminal.lease.changed")]
     Lease {
         #[serde(rename = "sessionId")]
         session_id: String,
+        #[serde(rename = "streamId")]
+        stream_id: String,
         #[serde(rename = "leaseId")]
         lease_id: Option<String>,
         writable: bool,

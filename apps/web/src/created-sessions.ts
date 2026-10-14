@@ -89,6 +89,14 @@ export class CreatedSessions {
     return observed && visible(observed) ? observed : undefined;
   }
 
+  get(id: string | null): SessionInfo | undefined {
+    if (!id) return undefined;
+    const session = this.inventory.get(id) ?? this.pending.get(id);
+    return session && this.availableMachines.has(session.machineId)
+      ? session
+      : undefined;
+  }
+
   visible(): SessionInfo[] {
     return [...this.inventory.values(), ...this.pending.values()].filter(
       visible,

@@ -2,8 +2,8 @@
 
 ## Compatibility and rollout
 
-This change uses WebSocket subprotocol `ergent.preview.v2` for both Agent and
-browser connections. Server, Agent and web assets must be upgraded together.
+Inventory chunking was introduced in `ergent.preview.v2`; terminal recovery now
+uses `ergent.preview.v3` for both Agent and browser connections. Server, Agent and web assets must be upgraded together.
 An old peer receives HTTP 426 `PROTOCOL_UNSUPPORTED` instead of a successful
 connection with an incomplete list. A refreshed browser loads the new web assets;
 old Agents must be upgraded. There is no fallback that truncates or drops history.
@@ -20,26 +20,31 @@ daemon lifetime. Reusing a session ID with that config returns the same record,
 even after exit or removal of the old working directory; conflicting configs fail.
 Exited sessions no longer count against the 20 concurrent-runtime limit. The
 former 1,000 lifetime-create limit has been removed. After confirmed process exit,
-PTY master/writer/killer handles, the VT parser, viewer/lease state and deduplication
-caches are released. Historical records do not retain an attachable terminal screen.
+PTY master/writer/killer handles, the VT parser, input leases and deduplication
+caches are released. Existing viewers may retain bounded final-output recovery
+records for at most 60 seconds plus the cleanup tick, independently of live-runtime
+capacity. Final ACK, detach or disconnect releases them earlier; see
+[terminal recovery guarantees](TERMINAL_RECOVERY.md). Historical records do not
+retain a durable attachable terminal screen.
 
 Exit publication waits for the PTY reader to drain the child's queued tail output.
 ConPTY resources are closed outside the parser lock so their output can keep
 draining. On Unix, a quiet 100 ms poll after shell exit ends the stream even if a
 background descendant still holds a slave handle. Continuous descendant output is
-drained for at most two seconds; a failed/expired drain sends `OUTPUT_TRUNCATED`
-to attached viewers before the final lifecycle event, and persists
+drained for at most two seconds; a failed/expired drain sends a scoped
+`terminal.ended` event with `truncated=true` to attached viewers before the final
+lifecycle event, and persists
 `SessionInfo.outputTruncated=true` in the historical metadata. Older stored records
 default this field to false. This boundary does not claim
-to capture future output from detached descendants, and no authoritative exited
-snapshot is retained. Metadata retention is independent of terminal-output retention.
+to capture future output from detached descendants. Only the bounded attached-viewer
+final snapshot described above is retained. Metadata retention is independent of terminal-output retention.
 
 The Server retains all session metadata in SQLite, including exited/lost records
 from prior Agent epochs. A complete inventory marks only missing running sessions
 as lost; it never deletes historical records. Metadata storage grows with history;
 this change does not provide disk compaction, automatic retention or output-log
-persistence. The UI currently displays running sessions, while the authenticated
-sessions API continues to return retained records.
+persistence. The sidebar displays active sessions; the selected final view stays read-only until
+switching or dismissal. The authenticated sessions API continues to return retained records.
 
 ## Wire format
 
@@ -92,4 +97,4 @@ background descendants, and create/idempotency with 1,501
 historical records plus the 20-active limit. Browser receiver tests run under the
 Playwright test runner without needing Chromium and verify atomic list publication,
 reconnect, malformed chunks and timeout. Existing browser end-to-end tests exercise
-v2 negotiation and normal reconnect/create/close flows.
+v3 negotiation and normal reconnect/create/close flows. Legacy v1/v2 peers are rejected.
