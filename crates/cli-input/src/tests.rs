@@ -427,7 +427,18 @@ impl PtyFixture {
                 panic!("PTY fixture timed out or exited; captured output withheld (diagnostic: {}; confirmation prompt: {}, bytes: {})",
                     fixture_failure_code(&self.output), self.output.windows(CONFIRM_PROMPT.len()).any(|w| w == CONFIRM_PROMPT.as_bytes()), self.output.len());
             });
+            let previous_len = self.output.len();
             self.output.extend(bytes);
+            // portable-pty starts ConPTY with INHERIT_CURSOR. Windows waits
+            // for this terminal-emulator reply before launching the fixture.
+            // Include a three-byte overlap to handle split query chunks.
+            let queries = self.output[previous_len.saturating_sub(3)..]
+                .windows(4)
+                .filter(|window| *window == b"\x1b[6n")
+                .count();
+            for _ in 0..queries {
+                self.send(b"\x1b[1;1R");
+            }
         }
     }
 
