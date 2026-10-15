@@ -449,8 +449,8 @@ fn validate_tls_mode(
 }
 
 /// Install Unix handlers before binding the listener (including the startup race).
+#[cfg(unix)]
 fn shutdown_signal() -> impl std::future::Future<Output = ()> {
-    #[cfg(unix)]
     let (mut interrupt, mut terminate) = (
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
             .expect("failed to install interrupt signal handler"),
@@ -458,17 +458,20 @@ fn shutdown_signal() -> impl std::future::Future<Output = ()> {
             .expect("failed to install termination signal handler"),
     );
     async move {
-        #[cfg(unix)]
         tokio::select! {
             _ = interrupt.recv() => {},
             _ = terminate.recv() => {},
         }
-        #[cfg(not(unix))]
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install interrupt signal handler");
         tracing::info!("Shutdown requested; draining connections");
     }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() {
+    tokio::signal::ctrl_c()
+        .await
+        .expect("failed to install interrupt signal handler");
+    tracing::info!("Shutdown requested; draining connections");
 }
 
 #[cfg(test)]

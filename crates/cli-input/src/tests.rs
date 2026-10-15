@@ -236,6 +236,47 @@ fn check_echo_restored(expected_echo: bool) {
     }
 }
 
+#[cfg(unix)]
+fn check_terminal_mode_restored(initial: &nix::sys::termios::Termios) {
+    use nix::sys::termios::{cfgetispeed, cfgetospeed, tcgetattr};
+    let current = tcgetattr(io::stdin()).unwrap();
+    // Compare the actual terminal settings, not nix's private libc cache.
+    // That private representation is not a portable state-equality contract.
+    assert!(
+        initial.input_flags == current.input_flags,
+        "terminal input flags changed"
+    );
+    assert!(
+        initial.output_flags == current.output_flags,
+        "terminal output flags changed"
+    );
+    assert!(
+        initial.control_flags == current.control_flags,
+        "terminal control flags changed"
+    );
+    assert!(
+        initial.local_flags == current.local_flags,
+        "terminal local flags changed"
+    );
+    assert!(
+        initial.control_chars == current.control_chars,
+        "terminal control chars changed"
+    );
+    assert!(
+        cfgetispeed(initial) == cfgetispeed(&current),
+        "terminal input speed changed"
+    );
+    assert!(
+        cfgetospeed(initial) == cfgetospeed(&current),
+        "terminal output speed changed"
+    );
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    assert!(
+        initial.line_discipline == current.line_discipline,
+        "terminal line discipline changed"
+    );
+}
+
 #[test]
 #[ignore = "test-only child process invoked by native PTY and pipe tests"]
 fn secret_input_fixture() {
@@ -294,10 +335,7 @@ fn secret_input_fixture() {
         if io::stdin().is_terminal() {
             check_echo_restored(!no_echo);
             #[cfg(unix)]
-            assert!(
-                initial_mode.unwrap() == nix::sys::termios::tcgetattr(io::stdin()).unwrap(),
-                "terminal mode changed"
-            );
+            check_terminal_mode_restored(&initial_mode.unwrap());
             #[cfg(windows)]
             assert_eq!(
                 initial_mode.unwrap(),
@@ -360,6 +398,14 @@ fn fixture_failure_code(output: &[u8]) -> &'static str {
         "console echo was not restored",
         "console line input was not restored",
         "terminal mode changed",
+        "terminal input flags changed",
+        "terminal output flags changed",
+        "terminal control flags changed",
+        "terminal local flags changed",
+        "terminal control chars changed",
+        "terminal input speed changed",
+        "terminal output speed changed",
+        "terminal line discipline changed",
         "console mode changed",
         "fixture returned an incorrect value",
         "crossterm retained pending input",
