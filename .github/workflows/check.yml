@@ -30,6 +30,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: '1.98.1'
@@ -51,3 +54,10 @@ jobs:
           name: browser-failure-traces
           path: test-results/
           retention-days: 3
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: first-account-ui-screenshots
+          path: test-results/setup-setup-refresh-clears-*/attachments/*.png
+          retention-days: 3
+          if-no-files-found: ignore

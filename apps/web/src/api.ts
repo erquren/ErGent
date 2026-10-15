@@ -1,10 +1,21 @@
 import type { SessionInfo } from "../../../packages/protocol-ts";
 import { t } from "./i18n";
 let csrfToken = "";
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
 export async function csrf() {
   const response = await fetch("/api/v1/auth/csrf");
   if (!response.ok) throw new Error("无法连接服务");
-  csrfToken = (await response.json()).data.csrfToken;
+  const token = (await response.json()).data?.csrfToken;
+  if (typeof token !== "string" || !token) throw new Error("无法连接服务");
+  csrfToken = token;
 }
 export async function api<T>(
   path: string,
@@ -24,9 +35,10 @@ export async function api<T>(
   if (response.status === 204) return undefined as T;
   const result = await response.json();
   if (!response.ok)
-    throw new Error(
+    throw new ApiError(
       result.error?.message ||
         t("请求失败 ({status})", { status: response.status }),
+      response.status,
     );
   if (result.data?.csrfToken) csrfToken = result.data.csrfToken;
   return result.data as T;

@@ -19,7 +19,7 @@
 
 从 [Releases](https://github.com/erquren/ErGent/releases) 下载对应平台的压缩包。每个包包含 Server、Agent、网页和启动脚本，无需安装 Rust、Node.js、pnpm 或 Python。
 
-解压后按包内 README 创建管理员、启动 Server，再从网页获取一次性令牌接入 Agent。详见 [发布包使用说明](scripts/release/README.md)。AI CLI 需自行安装在 Agent 所在机器。
+解压后启动 Server，首次打开网页时使用服务器控制终端显示的一次性初始化码，填写用户名及两次密码创建首个账户；已有账户则直接登录，再从网页获取一次性令牌接入 Agent。详见 [发布包使用说明](scripts/release/README.md)。AI CLI 需自行安装在 Agent 所在机器。
 
 ### 从源码运行
 

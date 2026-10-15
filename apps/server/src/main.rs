@@ -2,6 +2,7 @@ mod auth;
 mod login_guard;
 mod origin;
 mod routes;
+mod setup;
 mod storage;
 mod transport;
 use axum::{
@@ -28,6 +29,8 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Rotate the first-account setup code; display only on the controlling terminal.
+    SetupCode,
     /// Read the new password from stdin, not from the command line.
     AdminCreate {
         #[arg(long, default_value = "admin")]
@@ -192,6 +195,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let db = storage::open(&cli.database).await?;
     match cli.command {
+        Command::SetupCode => setup::console_code(&db, true).await?,
         Command::AdminCreate { username } => {
             eprintln!("从标准输入读取密码（至少 12 字节），输入完成后 EOF：");
             let mut password = String::new();
@@ -227,6 +231,7 @@ async fn main() -> anyhow::Result<()> {
                 );
                 allowed_origins.push(extra);
             }
+            setup::console_code(&db, false).await?;
             let mut hub = Hub::default();
             for row in sqlx::query("SELECT data FROM terminal_sessions")
                 .fetch_all(&db)
@@ -254,6 +259,7 @@ async fn main() -> anyhow::Result<()> {
             let api = Router::new()
                 .route("/auth/csrf", get(auth::get_csrf))
                 .route("/auth/login", post(auth::login))
+                .route("/auth/setup", get(setup::status).post(setup::create))
                 .route("/auth/logout", post(auth::logout))
                 .route("/auth/me", get(auth::me))
                 .route("/machines", get(routes::machines))

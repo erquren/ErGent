@@ -33,8 +33,45 @@ export const english: Record<string, string> = {
   "真实终端，本机运行，随时继续。":
     "Real terminals. Local processes. Pick up anywhere.",
   进入你的工作台: "Open your workspace",
-  "使用服务器上创建的管理员账号登录。":
-    "Sign in with the admin account created on your server.",
+  "使用此服务器上的账户登录。": "Sign in with your account on this server.",
+  首次使用: "FIRST-TIME SETUP",
+  创建首个账户: "Create your first account",
+  创建账户: "Create account",
+  "正在创建账户…": "Creating account…",
+  "正在登录…": "Signing in…",
+  "此服务器尚未设置账户。完成初始化后即可登录工作台。":
+    "This server has no account yet. Set it up to sign in to your workspace.",
+  确认密码: "Confirm password",
+  一次性初始化码: "One-time setup code",
+  "初始化码仅在服务器交互式终端显示，15 分钟内有效。需要新码时，对同一数据库运行 setup-code。创建首个账户后失效。":
+    "The code is shown only in the server’s interactive terminal and lasts 15 minutes. For a new code, run setup-code with the same database. It expires after the first account is created.",
+  "用户名须为 1–120 UTF-8 字节，不能含首尾空白或控制字符":
+    "Username must be 1–120 UTF-8 bytes, without leading/trailing whitespace or control characters",
+  "密码须为 12–1024 UTF-8 字节": "Password must be 12–1024 UTF-8 bytes",
+  两次输入的密码不一致: "Passwords do not match",
+  "用户名必须为 1–120 字节，不能包含控制字符或首尾空白":
+    "Username must be 1–120 UTF-8 bytes, without leading/trailing whitespace or control characters",
+  "密码长度必须为 12–1024 字节": "Password must be 12–1024 UTF-8 bytes",
+  "首次设置必须使用已配置的本机 HTTP 或 HTTPS 来源":
+    "First-time setup requires a configured localhost HTTP or HTTPS origin",
+  "初始化码无效或已过期；请在服务器终端运行 setup-code 获取新码":
+    "The setup code is invalid or expired. Run setup-code in the server terminal for a new code",
+  "初始化尝试过多，请稍后重试":
+    "Too many setup attempts. Please try again later",
+  "首次账号设置已完成，请登录":
+    "First-account setup is complete. Please sign in",
+  "首个账户已创建。请使用刚设置的密码登录。":
+    "Your first account is ready. Sign in with the password you just set.",
+  "初始化已完成。请使用已创建的账户登录。":
+    "Setup is already complete. Sign in with an existing account.",
+  "正在检查工作台…": "Checking your workspace…",
+  "正在连接服务器，请稍候。": "Connecting to the server. Please wait.",
+  暂时无法连接工作台: "Cannot connect to your workspace",
+  "无法确认账户状态，请检查服务器与网络后重试。":
+    "Could not check account status. Check the server and your connection, then try again.",
+  重试连接: "Try again",
+  "无法连接服务，请检查连接后重试。":
+    "Cannot connect to the server. Check your connection and try again.",
   用户名: "Username",
   密码: "Password",
   连接工作台: "Sign in",

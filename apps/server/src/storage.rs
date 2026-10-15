@@ -60,6 +60,11 @@ pub async fn open(path: &Path) -> Result<SqlitePool> {
     sqlx::raw_sql(include_str!("../../../migrations/0004_login_backoff.sql"))
         .execute(&mut *tx)
         .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0005_first_account_setup.sql"
+    ))
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(db)
 }

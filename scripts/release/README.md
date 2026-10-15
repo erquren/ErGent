@@ -7,15 +7,25 @@
 
 先进入解压目录。Linux/macOS 使用 `./ergent-server`；Windows PowerShell 使用 `./ergent-server.exe`。
 
+Linux/macOS：`./start-server.sh`。Windows：`./start-server.cmd`。
+首次运行空数据库时，程序在服务器的控制终端显示一个 15 分钟有效的一次性初始化码。
+打开 http://127.0.0.1:7777，填写初始化码、用户名、密码和确认密码，创建首个账户后登录。
+密码字段默认隐藏，两次输入必须一致，长度为 12–1024 个 UTF-8 字节。
+现有数据库已有账户时直接显示登录页，不会重新开放初始化。当前没有管理员/普通用户角色之分。
+
+初始化码只写入真正的控制终端，不写入重定向的标准输出、标准错误或常规日志；数据库仅保存码的哈希。
+在码有效期间重启或启动另一实例不会轮换它。码过期、遗失，或 Server 作为无控制终端的后台服务运行时，
+在服务器本机的交互终端执行以下命令，使用与 Server 相同的数据库路径，领取新的码：
+
 ```sh
-./ergent-server admin-create --username admin
+./ergent-server --database .local/server.db setup-code
 ```
 
-从标准输入输入密码（至少 12 字节）并按回车，然后结束输入：Unix Ctrl-D；Windows Ctrl-Z 后回车。
-密码输入没有交互式隐藏提示，请在私人终端操作。
-
-Linux/macOS：`./start-server.sh`。Windows：`./start-server.cmd`。
-默认浏览器访问 http://127.0.0.1:7777，用刚创建的账号登录。
+Windows 使用 `./ergent-server.exe`。该命令会立即使旧码失效，也需要真实控制终端。
+创建成功后初始化永久关闭；重启、码过期或删除账户都不会重新开放。
+不要将初始化码、密码放入 URL、命令行参数、聊天或日志。远程初始化必须使用配置好的 HTTPS origin；
+局域网明文 HTTP 和 `--allow-any-origin` 不会放宽初始化的保护。反向代理后仍须准确配置外部 HTTPS `--origin`，
+并通过回环监听或防火墙阻止公网绕过代理直接访问后端；Origin 配置本身不会为后端启用 TLS。
 启动脚本切换到包目录，网页读取 `web/`，数据写入包目录的 `.local/`。
 
 局域网示例（把 IP 换成实际地址；Windows 换为 .cmd）：
@@ -28,6 +38,13 @@ Linux/macOS：`./start-server.sh`。Windows：`./start-server.cmd`。
 `--allow-any-origin` 是显式的开发选项，发布包默认不开启；Tailscale 的 HTTP 浏览器测试可显式使用此选项。
 公网部署在 HTTPS 反向代理后，并设置 `--origin https://你的域名`，代理需支持 WebSocket。
 
+### 保留 CLI 自动化创建账户
+
+自动化仍可调用 `ergent-server admin-create --username 用户名`，通过标准输入提供一次密码，关闭输入流后完成。
+首次 CLI 创建同样会关闭网页初始化；后续仍可由服务器操作者使用 CLI 创建独立账户。
+不要将密码放入命令行参数或 shell 历史。CLI 的交互式 stdin 读取仍需要 EOF，且不会隐藏回显或要求二次确认；
+手动首次创建推荐使用上面的网页初始化流程。`scripts/dev.py` 和既有自动化的单次 stdin 调用保持兼容。
+
 ## 启动 Agent
 
 网页登录后创建一次性设备注册令牌。进入包目录执行（Windows 使用 .exe）：
@@ -37,7 +54,7 @@ Linux/macOS：`./start-server.sh`。Windows：`./start-server.cmd`。
 ./ergent-agent run
 ```
 
-enroll 从标准输入读取令牌，输入后结束输入，方式同上。
+enroll 从标准输入读取令牌；输入并按回车后，Unix 使用 Ctrl-D 结束输入，Windows 使用 Ctrl-Z 后回车。
 在同一台机器测试可使用 `--server http://127.0.0.1:7777`。
 当前 Agent 仅允许 loopback HTTP；跨机器连接（包括 Tailscale）使用 HTTPS。
 Agent 配置默认存放 `.local/agent.json`；可在 enroll/run 前使用 `--config 路径` 指定同一文件。

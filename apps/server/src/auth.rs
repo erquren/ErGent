@@ -63,7 +63,7 @@ pub async fn identity(app: &App, headers: &HeaderMap, write: bool) -> Result<Ide
         token_hash,
     })
 }
-fn csrf(headers: &HeaderMap, expected: &str) -> Result<(), ApiError> {
+pub(crate) fn csrf(headers: &HeaderMap, expected: &str) -> Result<(), ApiError> {
     if headers.get("x-csrf-token").and_then(|v| v.to_str().ok()) != Some(expected) {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
@@ -249,22 +249,54 @@ pub async fn create_admin(
     username: &str,
     password: &str,
 ) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        password.len() >= 12 && password.len() <= 1024,
-        "密码长度必须为 12–1024 字节"
-    );
-    let salt = SaltString::generate(&mut rand::rngs::OsRng);
-    let hash = Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| anyhow::anyhow!(e.to_string()))?
-        .to_string();
+    validate_new_credentials(username, password).map_err(|e| anyhow::anyhow!(e.message))?;
+    let hash = password_hash(password.to_owned())
+        .await
+        .map_err(|_| anyhow::anyhow!("无法创建密码哈希"))?;
+    let mut tx = db.begin_with("BEGIN IMMEDIATE").await?;
     sqlx::query("INSERT INTO users VALUES(?,?,?)")
         .bind(Uuid::new_v4().to_string())
         .bind(username)
         .bind(hash)
-        .execute(db)
+        .execute(&mut *tx)
         .await?;
+    crate::setup::close(&mut tx).await?;
+    tx.commit().await?;
     Ok(())
+}
+
+pub(crate) fn validate_new_credentials(username: &str, password: &str) -> Result<(), ApiError> {
+    if username.is_empty()
+        || username.len() > 120
+        || username.trim() != username
+        || username.chars().any(char::is_control)
+    {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "VALIDATION_ERROR",
+            "用户名必须为 1–120 字节，不能包含控制字符或首尾空白",
+        ));
+    }
+    if !(12..=1024).contains(&password.len()) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "VALIDATION_ERROR",
+            "密码长度必须为 12–1024 字节",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) async fn password_hash(password: String) -> Result<String, ApiError> {
+    tokio::task::spawn_blocking(move || {
+        let salt = SaltString::generate(&mut rand::rngs::OsRng);
+        Argon2::default()
+            .hash_password(password.as_bytes(), &salt)
+            .map(|hash| hash.to_string())
+            .map_err(|_| ApiError::internal())
+    })
+    .await
+    .map_err(|_| ApiError::internal())?
 }
 
 #[cfg(test)]

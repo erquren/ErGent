@@ -899,6 +899,9 @@ p {
 }
 .login-form {
   display: grid;
+  /* Let the form shrink below the card's preferred width on narrow screens. */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   place-items: center;
   padding: 40px;
   background: #fafbf9;
@@ -906,6 +909,7 @@ p {
 .login-box {
   width: 330px;
   max-width: 100%;
+  min-width: 0;
 }
 .login-box h2 {
   font-size: 25px;
@@ -1708,4 +1712,21 @@ button:hover {
   .brand .product-wordmark {
     width: 120px;
   }
+}
+
+/* First-account setup shares the existing login appearance and language controls. */
+.auth-help {
+  color: var(--secondary);
+  font-size: 11px;
+  line-height: 1.6;
+  margin: -9px 0 19px;
+}
+.login-box > .auth-notice {
+  color: var(--secondary);
+  line-height: 1.7;
+  margin-bottom: 20px;
+}
+
+.login-form.setup-form {
+  padding-top: 76px;
 }
