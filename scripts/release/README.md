@@ -3,6 +3,17 @@
 本包包含 Server、Agent、网页和启动脚本，可分别运行 Server 或 Agent。无需 Rust、Node.js、pnpm 或 Python；AI CLI 需自行安装在 Agent 机器上。
 Each archive includes Server, Agent, the web UI and launch scripts. No build tools are required; install your AI CLIs separately on the Agent machine.
 
+## 查看命令帮助 / Command help
+
+`./ergent-server --help` 显示命令概览和 Nginx 示例；详细参数请按子命令查看。
+Top-level help shows an overview and Nginx example; open each subcommand for its options:
+
+```sh
+./ergent-server run --help
+./ergent-server setup-code --help
+./ergent-server admin-create --help
+```
+
 ## 启动 Server
 
 先进入解压目录，**推荐使用 `./start-server.sh`**（Windows 使用 `./start-server.cmd`）。脚本会切换到包目录并加载 `web/`；不要在脚本参数中再加 `run`。

@@ -17,6 +17,21 @@ fn server_help_is_concise_bilingual_and_explains_package_transport() {
     assert!(top.contains("start-server.sh"));
     assert!(top.contains("--web ./web"));
     assert!(top.contains("Same database"));
+    for expected in [
+        "详细参数 / Details:",
+        "ergent-server run --help",
+        "ergent-server setup-code --help",
+        "ergent-server admin-create --help",
+        "Nginx HTTPS",
+        "127.0.0.1:7777",
+        "./ergent-server run --web ./web --tls-mode proxy --origin https://example.com",
+        "./start-server.sh --tls-mode proxy --origin https://example.com",
+        "Replace example.com",
+        "does not enable TLS",
+    ] {
+        assert!(top.contains(expected), "missing top-level help: {expected}");
+    }
+    assert_eq!(top, help(&["-h"]));
     assert!(top.lines().count() < 45);
     let run = help(&["run", "--help"]);
     for expected in [

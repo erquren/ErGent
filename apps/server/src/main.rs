@@ -23,7 +23,7 @@ use uuid::Uuid;
 #[derive(Parser)]
 #[command(
     about = "ErGent 服务端 / Server",
-    after_help = "部署包 / Package: ./start-server.sh --tls-mode dev-http (无需 run / omit run).\n直接运行 / Binary: ergent-server run --web ./web.\n同一数据库 / Same database: pass --database PATH to run, setup-code and admin-create."
+    after_help = "详细参数 / Details:\n  ergent-server run --help\n  ergent-server setup-code --help\n  ergent-server admin-create --help\n\nNginx HTTPS 反代 / Reverse proxy (127.0.0.1:7777):\n  ./ergent-server run --web ./web --tls-mode proxy --origin https://example.com\n部署包简写 / Package shortcut (无需 run / omit run):\n  ./start-server.sh --tls-mode proxy --origin https://example.com\n替换域名 / Replace example.com. --origin 不启用 TLS / does not enable TLS.\n同一数据库 / Same database: pass --database PATH to run, setup-code and admin-create."
 )]
 struct Cli {
     #[arg(
