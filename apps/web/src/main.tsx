@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowUpRight,
+  ArrowRight,
   ChevronDown,
   Folder,
   Laptop,
@@ -14,7 +15,6 @@ import {
   X,
   Monitor,
   Copy,
-  ArrowRight,
   Radio,
   Pencil,
   Sun,
@@ -30,7 +30,8 @@ import type {
   SessionInfo,
   ToolStatus,
 } from "../../../packages/protocol-ts";
-import { api, csrf, waitOperation } from "./api";
+import { api, waitOperation } from "./api";
+import { AuthScreen } from "./AuthScreen";
 import { TerminalView } from "./TerminalView";
 import "./style.css";
 import { useAppearance, terminalTheme, terminalThemes } from "./theme";
@@ -150,8 +151,7 @@ function App() {
       window.removeEventListener("keydown", escape);
     };
   }, []);
-  const [user, setUser] = useState<string | null>(null),
-    [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<string | null>(null);
   const [machines, setMachines] = useState<MachineInfo[]>([]),
     [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null),
@@ -180,20 +180,11 @@ function App() {
     [title, setTitle] = useState("Terminal");
   const [busy, setBusy] = useState(false),
     [confirmClose, setConfirmClose] = useState(false);
-  const [username, setUsername] = useState("admin"),
-    [password, setPassword] = useState("");
   const [toolNotices, setToolNotices] = useState<
     { eventId: string; sessionId: string; title: string; status: ToolStatus }[]
   >([]);
   const wsRef = useRef<WebSocket | null>(null);
   const createdSessions = useRef(new CreatedSessions());
-  useEffect(() => {
-    csrf()
-      .then(() => api<{ username: string }>("/auth/me"))
-      .then((v) => setUser(v.username))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
   useEffect(() => {
     createdSessions.current = new CreatedSessions();
     if (!user) return;
@@ -451,105 +442,17 @@ function App() {
       }
     });
 
-  if (loading)
-    return (
-      <div className="loading">
-        <img className="loading-logo" src="/branding/logo.svg" alt="ErGent" />
-        <span>{t("Connecting to your workspace…")}</span>
-      </div>
-    );
   if (!user)
     return (
-      <main className="login">
-        <section className="login-story">
-          <div className="wordmark">
-            <img className="product-mark" src="/branding/logo.svg" alt="" />
-            <img
-              className="product-wordmark"
-              src="/branding/wordmark.png"
-              alt="ErGent"
-            />
-          </div>
-          <div>
-            <div className="eyebrow">{t("YOUR MACHINES. ONE WORKSPACE.")}</div>
-            <h1>
-              {t("开发现场，")}
-              <br />
-              {t("随时在场")}
-              <span>{t("。")}</span>
-            </h1>
-            <p>
-              {t("让每一台开发机，都成为浏览器里的工作台。")}
-              <br />
-              {t("真实终端，本机运行，随时继续。")}
-            </p>
-            <div className="platforms">
-              <span>macOS</span>
-              <span>Linux</span>
-              <span>Windows</span>
-            </div>
-          </div>
-          <div className="story-foot">
-            {t("A personal command center for your work.")}
-            <ArrowUpRight size={18} />
-          </div>
-        </section>
-        <section className="login-form">
-          <div className="header-controls">
+      <AuthScreen
+        controls={
+          <>
             {languagePicker}
             {themePicker}
-          </div>
-          <div className="login-box">
-            <span className="eyebrow">{t("WELCOME BACK")}</span>
-            <h2>{t("进入你的工作台")}</h2>
-            <p>{t("使用服务器上创建的管理员账号登录。")}</p>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void act(async () => {
-                  await csrf();
-                  const result = await api<{ user: { username: string } }>(
-                    "/auth/login",
-                    "POST",
-                    { username, password },
-                  );
-                  setPassword("");
-                  setUser(result.user.username);
-                });
-              }}
-            >
-              <label>
-                {t("用户名")}
-                <input
-                  autoComplete="username"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  required
-                />
-              </label>
-              <label>
-                {t("密码")}
-                <input
-                  type="password"
-                  autoComplete="current-password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                />
-              </label>
-              {error && <div className="error">{t(error)}</div>}
-              <button className="primary full" disabled={busy}>
-                {t("连接工作台")}
-                <ArrowRight size={17} />
-              </button>
-            </form>
-            <div className="login-note">
-              <i className="dot green" />
-              {t("Self-hosted · Your infrastructure")}
-            </div>
-          </div>
-        </section>
-      </main>
+          </>
+        }
+        onAuthenticated={setUser}
+      />
     );
   return (
     <div className={`app ${navOpen ? "nav-open" : ""}`}>

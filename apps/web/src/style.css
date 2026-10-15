@@ -1709,3 +1709,20 @@ button:hover {
     width: 120px;
   }
 }
+
+/* First-account setup shares the existing login appearance and language controls. */
+.auth-help {
+  color: var(--secondary);
+  font-size: 11px;
+  line-height: 1.6;
+  margin: -9px 0 19px;
+}
+.login-box > .auth-notice {
+  color: var(--secondary);
+  line-height: 1.7;
+  margin-bottom: 20px;
+}
+
+.login-form.setup-form {
+  padding-top: 76px;
+}
