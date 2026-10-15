@@ -315,6 +315,7 @@ mod login_tests {
             hub: Arc::new(Mutex::new(crate::Hub::default())),
             login_locks: Arc::new(std::array::from_fn(|_| Mutex::new(()))),
             login_policy: crate::login_guard::Policy::default(),
+            connections: crate::Connections::default(),
         }
     }
     async fn attempt(app: &App, ip: &str, username: &str, password: &str) -> Response {

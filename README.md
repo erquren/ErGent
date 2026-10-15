@@ -7,19 +7,43 @@
 **版本：v1.1.0**
 
 浏览器里的个人开发工作台：Agent 主动连接 Server，在网页中按设备管理真实 Shell 终端。
+A personal development workspace in your browser: Agents connect to Server and expose real shell terminals by device.
 
 - 多设备、终端卡片、断线重连与单写入者接管
 - 在终端运行已安装的 Codex、Claude Code、OpenCode 等 CLI
 - 支持终端重命名、配色、明暗主题和中英文界面
 - Windows、Linux、macOS 均提供 x86_64 / ARM64 发布包
 
-## 快速开始
+## 快速开始 / Quick start
 
-### 使用发布包
+### 原生发布包 / Native packages
 
-从 [Releases](https://github.com/erquren/ErGent/releases) 下载对应平台的压缩包。每个包包含 Server、Agent、网页和启动脚本，无需安装 Rust、Node.js、pnpm 或 Python。
+从 [Releases](https://github.com/erquren/ErGent/releases) 下载对应平台的包并解压。Server、Agent、网页和启动脚本均已包含，无需构建工具；AI CLI 另装在 Agent 机器上。
+Download and extract the archive for your platform. Server, Agent, web UI and launch scripts are included; install AI CLIs separately on the Agent machine.
 
-解压后启动 Server，首次打开网页时使用服务器控制终端显示的一次性初始化码，填写用户名及两次密码创建首个账户；已有账户则直接登录，再从网页获取一次性令牌接入 Agent。详见 [发布包使用说明](scripts/release/README.md)。AI CLI 需自行安装在 Agent 所在机器。
+进入解压目录，推荐使用启动脚本（Windows 使用 `./start-server.cmd`）：
+From the extracted directory, use the launch script:
+
+```sh
+./start-server.sh --tls-mode dev-http
+```
+
+本机打开 **http://127.0.0.1:7777**。脚本会加载包内 `web/`；若直接运行二进制，使用 `./ergent-server run --web "$PWD/web" --tls-mode dev-http`。数据库默认是包内 `.local/server.db`；已使用自定义路径时继续使用同一文件。
+Open the exact loopback URL above. The script selects the bundled UI; a direct binary launch needs `--web "$PWD/web"`. Keep the same database path for startup and administration.
+
+远程部署先选[同机 Nginx 代理、原生 HTTPS 或本机/SSH 测试](scripts/release/README.md#选择部署方式--choose-a-deployment-mode)。`--origin` 必须匹配浏览器地址，**不会启用 TLS**；`localhost` 与 `127.0.0.1` 不可混用，非默认端口须写明。
+For remote access, choose the linked Nginx, direct TLS or local/SSH instructions first. **Origin is not TLS configuration**; the browser's scheme, hostname and port must match exactly.
+
+首次用控制终端显示的初始化码创建账户；远程明文 HTTP 首次初始化会被拒绝。后台运行时，用同一数据库执行 `setup-code`，或用 `admin-create` 隐藏输入两次密码、分别按 Enter。网页登录后创建 Agent 令牌，`enroll` 隐藏输入一次令牌、按 Enter，无需 Ctrl-D/Ctrl-Z。完整命令见[发布包使用说明](scripts/release/README.md)。
+Create the first account with the terminal's setup code over HTTPS or native loopback/SSH access. `admin-create` asks for password + Enter twice; Agent `enroll` asks for token + Enter once. Neither interactive command needs Ctrl-D/Ctrl-Z. See the package guide for exact commands and existing-database handling.
+
+### Docker 部署 / Docker deployment
+
+单容器包含 Server 和网页，Agent 仍在开发机器原生运行。可挂载已有证书使用原生 HTTPS，或复用已有 Nginx；数据持久化，证书只读挂载，不自动申请/续期。
+One container runs Server and the web UI; Agents stay native on development machines. Choose direct TLS with existing certificates or your existing HTTPS proxy. Data is persistent; certificate issuance/renewal remains external.
+
+先从源码构建 `ergent-server:local`；只有确认镜像已发布后才使用拉取方式。配置、初始化与升级见 [Docker 部署指南](docs/docker.md)。
+Build `ergent-server:local` from source until a published image is confirmed available. See the Docker guide for configuration, account setup and upgrades.
 
 ### 从源码运行
 
@@ -56,7 +80,7 @@ python3 scripts/dev.py
 ## 安全与使用边界
 
 - 终端以 Agent 当前用户的权限运行。不自动安装或登录 AI CLI。
-- 公网部署使用 HTTPS 反向代理，并设置正确的 `--origin`；跨机器 Agent 连接必须使用 HTTPS。不要在公网启用 `--allow-any-origin`。
+- 公网部署使用原生 HTTPS（配置现有证书/私钥）或 HTTPS 反向代理，并设置正确的 `--origin`；跨机器 Agent 连接必须使用 HTTPS。不要在公网启用 `--allow-any-origin`。
 - 登录按来源 IP 使用时间窗口和指数退避：默认 15 分钟内第 5 次失败后等待 30 秒，继续失败逐次翻倍，单次最多 15 分钟。成功登录清零；重启保留尚未到期的限制。可用 `ergent-server --database .local/server.db login-unblock IP --actor 操作人 --reason 原因` 解锁并记录审计。配置、升级和审计查询见 [发布包使用说明](scripts/release/README.md#登录保护与审计)。代理部署需配置 `--trusted-proxy`，并由代理覆盖 `X-Real-IP`。
 - 关闭网页不结束终端；Agent 或机器重启后不能恢复原进程。终端浏览器保留最多 2,000 行滚动历史；短暂断线可从每会话 512 KiB 内存重放缓存继续，超出缓存或尺寸/Agent 变化时只恢复当前画面。完整历史不持久化，详见 [终端恢复与保留边界](TERMINAL_RECOVERY.md)。更新前请保存工作并备份数据。
 - 发布包为可解压运行的程序，未配置 Windows 签名或 macOS 签名、公证。平台要求和部署细节见 [发布包使用说明](scripts/release/README.md)。

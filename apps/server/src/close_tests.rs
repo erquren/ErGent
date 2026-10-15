@@ -15,6 +15,7 @@ async fn fixture() -> (tempfile::TempDir, App, SessionInfo) {
         hub: Arc::new(Mutex::new(crate::Hub::default())),
         login_locks: Arc::new(std::array::from_fn(|_| Mutex::new(()))),
         login_policy: crate::login_guard::Policy::default(),
+        connections: crate::Connections::default(),
     };
     sqlx::query("INSERT INTO users VALUES('owner','owner','unused')")
         .execute(&app.db)

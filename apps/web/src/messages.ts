@@ -41,6 +41,15 @@ export const english: Record<string, string> = {
   "正在登录…": "Signing in…",
   "此服务器尚未设置账户。完成初始化后即可登录工作台。":
     "This server has no account yet. Set it up to sign in to your workspace.",
+  提交前请确认: "Before you create an account",
+  "使用 HTTPS，或已配置的 localhost / 127.0.0.1 回环 HTTP。远程可用 SSH 隧道，但服务器必须看到回环连接。":
+    "Use HTTPS or configured localhost / 127.0.0.1 loopback HTTP. For remote access, an SSH tunnel must reach the server over loopback.",
+  "浏览器地址须与 --origin 的协议、主机和端口完全一致；localhost 与 127.0.0.1 不等同。":
+    "Your browser URL must match --origin exactly: scheme, host and port. localhost and 127.0.0.1 are different hosts.",
+  "dev-http 不允许远程 HTTP 初始化；Docker 端口映射也可能是非回环连接。":
+    "dev-http does not allow remote HTTP setup. Docker port mapping may still use a non-loopback connection.",
+  "也可在服务器终端对同一数据库运行 admin-create。CLI 仅替代初始化；请通过 HTTPS 或受保护的回环 / SSH 页面登录，勿在远程明文 HTTP 输入密码。":
+    "Alternatively, run admin-create in the server terminal with the same database. CLI creation only replaces setup; sign in over HTTPS or protected loopback / SSH. Never enter passwords over remote plain HTTP.",
   确认密码: "Confirm password",
   一次性初始化码: "One-time setup code",
   "初始化码仅在服务器交互式终端显示，15 分钟内有效。需要新码时，对同一数据库运行 setup-code。创建首个账户后失效。":

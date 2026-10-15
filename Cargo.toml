@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/server", "apps/agent", "crates/protocol", "crates/terminal"]
+members = ["apps/server", "apps/agent", "crates/protocol", "crates/terminal", "crates/cli-input"]
 resolver = "2"
 
 [workspace.package]
@@ -19,3 +19,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive", "env"] }
 ergent-protocol = { path = "crates/protocol" }
 ergent-terminal = { path = "crates/terminal" }
+ergent-cli-input = { path = "crates/cli-input" }

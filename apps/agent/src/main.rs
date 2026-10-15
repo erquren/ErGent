@@ -1,4 +1,5 @@
 mod close_requests;
+mod tls;
 mod tool_events;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -12,7 +13,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    io::{Read, Write},
+    io::Write,
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
@@ -23,38 +24,49 @@ use tokio_tungstenite::tungstenite::{
 use uuid::Uuid;
 
 #[derive(Parser)]
+#[command(
+    about = "ErGent 原生客户端 / Native Agent",
+    after_help = "注册 / Enroll: ergent-agent enroll --server https://example.com\n运行 / Run: ergent-agent run\n私有 CA / Private CA: add --ca-cert /path/ca.pem at enrollment; its path is saved.\n令牌隐藏输入，回车结束 / Token input is hidden; press Enter. Pipes keep bounded EOF input."
+)]
 struct Cli {
     #[arg(long, default_value = ".local/agent.json", global = true)]
+    /// 配置路径，注册和运行保持一致 / Same config path for enroll and run.
     config: PathBuf,
+    /// HTTPS/WSS 的 PEM CA；注册保存路径 / PEM CA for HTTPS/WSS; enroll saves path.
+    /// run 临时覆盖；仍验证主机名/IP / Run override only; hostname/IP checks stay enabled.
+    #[arg(long, value_name = "PATH", global = true)]
+    ca_cert: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Reads a one-time enrollment token from stdin.
+    /// 注册设备：隐藏令牌，回车结束 / Enroll: hidden token, Enter to submit.
     Enroll {
         #[arg(long)]
+        /// Server 来源：HTTPS 或本机 HTTP / Server origin: HTTPS or loopback HTTP.
         server: String,
         #[arg(long, default_value = "My development machine")]
+        /// 设备名称 / Device name.
         name: String,
     },
+    /// 连接服务并运行 / Connect and run.
     Run,
+    /// 检查运行环境 / Check runtime environment.
     Doctor,
-    /// Launch Codex with per-invocation completion notifications (no config.toml edits).
+    /// 启动 Codex 并接收完成通知 / Launch Codex with completion notifications.
     Codex {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Merge Ergent lifecycle hooks into the current user's Codex hooks.json.
+    /// 安装 Codex hooks / Install Codex lifecycle hooks.
     SetupCodex,
-    /// Read a provider-neutral ToolEvent JSON object from stdin.
+    /// 从 stdin 读取工具事件 JSON / Read tool-event JSON from stdin.
     ToolEvent,
     #[command(hide = true)]
     CodexHook,
     #[command(hide = true)]
-    CodexNotify {
-        payload: String,
-    },
+    CodexNotify { payload: String },
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,6 +74,8 @@ struct Config {
     server: String,
     machine_id: String,
     secret: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ca_cert: Option<PathBuf>,
 }
 fn server_url(server: &str) -> Result<url::Url> {
     let u = url::Url::parse(server)?;
@@ -108,14 +122,11 @@ async fn main() -> Result<()> {
                 !cli.config.exists(),
                 "配置文件已存在；请使用不同 --config 路径注册其他设备"
             );
-            eprintln!("从标准输入读取一次性注册 token，完成后 EOF：");
-            let mut token = String::new();
-            std::io::stdin().take(256).read_to_string(&mut token)?;
-            let client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(15))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()?;
-            let response=client.post(format!("{server}/api/v1/agent/enroll")).json(&json!({"enrollmentToken":token.trim(),"name":name,"os":std::env::consts::OS,"arch":std::env::consts::ARCH})).send().await?;
+            // Validate explicit trust before reading or transmitting the enrollment token.
+            let tls = tls::AgentTls::new(cli.ca_cert.as_deref())?;
+            let client = tls.http_client()?;
+            let token = ergent_cli_input::read_enrollment_token()?;
+            let response=client.post(format!("{server}/api/v1/agent/enroll")).json(&json!({"enrollmentToken":token,"name":name,"os":std::env::consts::OS,"arch":std::env::consts::ARCH})).send().await?;
             if !response.status().is_success() {
                 bail!("注册失败：HTTP {}", response.status());
             }
@@ -130,6 +141,7 @@ async fn main() -> Result<()> {
                     .as_str()
                     .context("missing credential")?
                     .into(),
+                ca_cert: tls.ca_cert().map(PathBuf::from),
             };
             if let Some(parent) = cli.config.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -167,6 +179,8 @@ async fn main() -> Result<()> {
             let config: Config =
                 serde_json::from_slice(&std::fs::read(&cli.config).context("请先 enroll")?)?;
             server_url(&config.server)?;
+            // Fail immediately for missing/invalid CA files rather than retrying forever.
+            let tls = tls::AgentTls::new(cli.ca_cert.as_deref().or(config.ca_cert.as_deref()))?;
             let lock = std::fs::OpenOptions::new()
                 .create(true)
                 .truncate(false)
@@ -186,7 +200,7 @@ async fn main() -> Result<()> {
             let mut delay = 1;
             loop {
                 manager.reset_connections();
-                let connection = connect(&config, &epoch, &manager, &close_limit);
+                let connection = connect(&config, &tls, &epoch, &manager, &close_limit);
                 tokio::select! {
                     result=connection=>{if let Err(error)=result{tracing::warn!(%error,"连接中断，终端继续运行");}}
                     _=tokio::signal::ctrl_c()=>{tracing::info!("停止 Agent，关闭它创建的终端");break;}
@@ -202,6 +216,7 @@ async fn main() -> Result<()> {
 }
 async fn connect(
     config: &Config,
+    tls: &tls::AgentTls,
     epoch: &str,
     manager: &Arc<TerminalManager>,
     close_limit: &Arc<tokio::sync::Semaphore>,
@@ -227,7 +242,12 @@ async fn connect(
         .max_frame_size(Some(MAX_MESSAGE));
     let (mut ws, response) = tokio::time::timeout(
         Duration::from_secs(15),
-        tokio_tungstenite::connect_async_with_config(request, Some(ws_config), false),
+        tokio_tungstenite::connect_async_tls_with_config(
+            request,
+            Some(ws_config),
+            false,
+            Some(tls.websocket_connector()),
+        ),
     )
     .await??;
     anyhow::ensure!(
@@ -325,4 +345,56 @@ where
         Ok(())
     };
     tokio::time::timeout(Duration::from_secs(TRANSFER_TIMEOUT_SECS), send).await?
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn existing_config_without_ca_remains_compatible() {
+        let config: Config = serde_json::from_str(
+            r#"{"server":"https://example.com","machineId":"id","secret":"test"}"#,
+        )
+        .unwrap();
+        assert!(config.ca_cert.is_none());
+        assert!(serde_json::to_value(config)
+            .unwrap()
+            .get("caCert")
+            .is_none());
+    }
+
+    #[test]
+    fn ca_cert_option_is_global_and_overrides_saved_path() {
+        for args in [
+            vec!["ergent-agent", "--ca-cert", "new.pem", "run"],
+            vec!["ergent-agent", "run", "--ca-cert", "new.pem"],
+            vec![
+                "ergent-agent",
+                "enroll",
+                "--server",
+                "https://example.com",
+                "--ca-cert",
+                "new.pem",
+            ],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert_eq!(
+                cli.ca_cert.as_deref(),
+                Some(std::path::Path::new("new.pem"))
+            );
+        }
+        let config: Config = serde_json::from_str(
+            r#"{"server":"https://example.com","machineId":"id","secret":"test","caCert":"saved.pem"}"#,
+        ).unwrap();
+        let cli = Cli::try_parse_from(["ergent-agent", "run", "--ca-cert", "new.pem"]).unwrap();
+        assert_eq!(
+            cli.ca_cert.as_deref().or(config.ca_cert.as_deref()),
+            Some(std::path::Path::new("new.pem"))
+        );
+        assert_eq!(
+            config.ca_cert.as_deref(),
+            Some(std::path::Path::new("saved.pem"))
+        );
+    }
 }
