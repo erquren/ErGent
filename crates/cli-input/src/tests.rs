@@ -240,8 +240,7 @@ fn check_echo_restored(expected_echo: bool) {
 fn check_terminal_mode_restored(initial: &nix::sys::termios::Termios) {
     use nix::sys::termios::{cfgetispeed, cfgetospeed, tcgetattr};
     let current = tcgetattr(io::stdin()).unwrap();
-    // Compare the actual terminal settings, not nix's private libc cache.
-    // That private representation is not a portable state-equality contract.
+    // Check each functional setting separately for secret-free diagnostics.
     assert!(
         initial.input_flags == current.input_flags,
         "terminal input flags changed"
@@ -254,10 +253,14 @@ fn check_terminal_mode_restored(initial: &nix::sys::termios::Termios) {
         initial.control_flags == current.control_flags,
         "terminal control flags changed"
     );
-    assert!(
-        initial.local_flags == current.local_flags,
-        "terminal local flags changed"
-    );
+    let local_delta = initial.local_flags ^ current.local_flags;
+    // XNU sets PENDIN when ICANON is restored (tty.c, TIOCSETA handling),
+    // even with an empty input queue. It is transient kernel bookkeeping,
+    // cleared by the next input/read, not a user-configured terminal mode.
+    // https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/tty.c
+    #[cfg(target_os = "macos")]
+    let local_delta = local_delta & !nix::sys::termios::LocalFlags::PENDIN;
+    assert!(local_delta.is_empty(), "terminal local flags changed");
     assert!(
         initial.control_chars == current.control_chars,
         "terminal control chars changed"
