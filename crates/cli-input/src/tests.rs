@@ -350,6 +350,29 @@ struct PtyFixture {
     _master: Box<dyn portable_pty::MasterPty + Send>,
 }
 
+fn fixture_failure_code(output: &[u8]) -> &'static str {
+    // Never include raw PTY output in CI diagnostics. These fixed strings can
+    // identify a failed invariant without disclosing even synthetic secrets.
+    for code in [
+        "raw mode was not restored",
+        "terminal echo was not restored",
+        "canonical input was not restored",
+        "console echo was not restored",
+        "console line input was not restored",
+        "terminal mode changed",
+        "console mode changed",
+        "fixture returned an incorrect value",
+        "crossterm retained pending input",
+        "pending secret bytes leaked to the next terminal reader",
+        "redirected child failed",
+    ] {
+        if output.windows(code.len()).any(|w| w == code.as_bytes()) {
+            return code;
+        }
+    }
+    "unclassified fixture failure"
+}
+
 impl PtyFixture {
     fn new(mode: &str, expected: &str) -> Self {
         Self::with_options(mode, expected, false, false)
@@ -401,8 +424,8 @@ impl PtyFixture {
         while !self.output.windows(marker.len()).any(|w| w == marker) {
             let left = deadline.saturating_duration_since(Instant::now());
             let bytes = self.receiver.recv_timeout(left).unwrap_or_else(|_| {
-                panic!("PTY fixture timed out or exited; captured output withheld (confirmation prompt: {}, bytes: {})",
-                    self.output.windows(CONFIRM_PROMPT.len()).any(|w| w == CONFIRM_PROMPT.as_bytes()), self.output.len());
+                panic!("PTY fixture timed out or exited; captured output withheld (diagnostic: {}; confirmation prompt: {}, bytes: {})",
+                    fixture_failure_code(&self.output), self.output.windows(CONFIRM_PROMPT.len()).any(|w| w == CONFIRM_PROMPT.as_bytes()), self.output.len());
             });
             self.output.extend(bytes);
         }
