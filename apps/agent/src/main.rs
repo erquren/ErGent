@@ -24,11 +24,16 @@ use tokio_tungstenite::tungstenite::{
 use uuid::Uuid;
 
 #[derive(Parser)]
+#[command(
+    about = "ErGent 原生客户端 / Native Agent",
+    after_help = "注册 / Enroll: ergent-agent enroll --server https://example.com\n运行 / Run: ergent-agent run\n私有 CA / Private CA: add --ca-cert /path/ca.pem at enrollment; its path is saved.\n令牌隐藏输入，回车结束 / Token input is hidden; press Enter. Pipes keep bounded EOF input."
+)]
 struct Cli {
     #[arg(long, default_value = ".local/agent.json", global = true)]
+    /// 配置路径，注册和运行保持一致 / Same config path for enroll and run.
     config: PathBuf,
-    /// 为 HTTPS/WSS 加载额外的 PEM CA 证书；enroll 保存证书文件的绝对路径。
-    /// run 时仅在本次运行中覆盖已保存的路径，不修改配置文件。
+    /// HTTPS/WSS 的 PEM CA；注册保存路径 / PEM CA for HTTPS/WSS; enroll saves path.
+    /// run 临时覆盖；仍验证主机名/IP / Run override only; hostname/IP checks stay enabled.
     #[arg(long, value_name = "PATH", global = true)]
     ca_cert: Option<PathBuf>,
     #[command(subcommand)]
@@ -36,30 +41,32 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// 隐藏输入一次性注册令牌，回车结束；管道或文件输入兼容 EOF。
+    /// 注册设备：隐藏令牌，回车结束 / Enroll: hidden token, Enter to submit.
     Enroll {
         #[arg(long)]
+        /// Server 来源：HTTPS 或本机 HTTP / Server origin: HTTPS or loopback HTTP.
         server: String,
         #[arg(long, default_value = "My development machine")]
+        /// 设备名称 / Device name.
         name: String,
     },
+    /// 连接服务并运行 / Connect and run.
     Run,
+    /// 检查运行环境 / Check runtime environment.
     Doctor,
-    /// Launch Codex with per-invocation completion notifications (no config.toml edits).
+    /// 启动 Codex 并接收完成通知 / Launch Codex with completion notifications.
     Codex {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Merge Ergent lifecycle hooks into the current user's Codex hooks.json.
+    /// 安装 Codex hooks / Install Codex lifecycle hooks.
     SetupCodex,
-    /// Read a provider-neutral ToolEvent JSON object from stdin.
+    /// 从 stdin 读取工具事件 JSON / Read tool-event JSON from stdin.
     ToolEvent,
     #[command(hide = true)]
     CodexHook,
     #[command(hide = true)]
-    CodexNotify {
-        payload: String,
-    },
+    CodexNotify { payload: String },
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

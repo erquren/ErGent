@@ -1,8 +1,22 @@
-# Docker 部署 Server 与网页
+# Docker 部署 Server 与网页 / Server + web UI
 
 一个镜像包含 **Server 与已构建的网页**，支持原生 HTTPS，**Nginx 是可选项**。Agent 继续以原生程序运行在实际开发机器上，使用该机器的 Shell、文件、开发工具和当前用户权限。容器不需要挂载 Docker socket、开发目录或 Agent 凭据。
+One container runs Server and the built web UI. Agents remain native on development machines; do not mount their files, credentials or the Docker socket into Server.
 
 默认连接方式：浏览器 / 原生 Agent → ErGent 原生 HTTPS → `/data/server.db`。已有 Nginx 的用户也可选择本文的[宿主机代理方案](#可选复用宿主机-nginx)或[容器代理方案](#可选复用已有-nginx-容器)，两者都不会安装或强制启动另一套 Nginx。另有仅限本机开发的[显式 HTTP 模式](#仅限本机开发显式-dev-http)。
+
+## 先选部署入口 / Choose the right guide
+
+- 下载的是解压即用的原生包？使用[原生发布包说明](../scripts/release/README.md#启动-server)：推荐 `./start-server.sh`；直接运行二进制必须加 `--web "$PWD/web"`。原生包也支持同机 Nginx、原生 TLS 和本机/SSH 测试，不需要 Docker。
+  For an extracted native archive, use the package guide and launch script. Docker is optional; native direct launches need the explicit bundled web path.
+- 本文容器数据库是 `/data/server.db`，位于持久化卷；原生包默认是包目录的 `.local/server.db`。若以前显式使用 `data/server.db` 或其他路径，继续指向那份实际数据；切换部署方式不会自动迁移数据库。
+  Docker uses `/data/server.db`; native packages default to `.local/server.db`. Preserve any explicitly chosen database path. Switching deployment methods does not migrate data automatically.
+- Docker 默认用下面的原生 HTTPS 流程；已有代理可选[宿主机 Nginx](#可选复用宿主机-nginx)或[已有 Nginx 容器](#可选复用已有-nginx-容器)。仅本机开发使用[独立 dev-http 配置](#仅限本机开发显式-dev-http)。只启动一套 Server，并在管理命令中沿用同一 Compose 文件和数据卷。
+  Choose direct HTTPS, an existing host/container proxy, or the separate local-development setup. Run one Server and keep the same Compose file and data volume for all management commands.
+- `ERGENT_ORIGIN` 只声明浏览器入口，**不启用 TLS**。HTTPS 仍需证书或真实 HTTPS 代理；主机、协议和非默认端口须精确匹配，`localhost` 与 `127.0.0.1` 不可互换。
+  Origin does not enable TLS. Match the external scheme, hostname and port exactly; `localhost` and `127.0.0.1` are different origins.
+- 首次账户通过 HTTPS 和交互式 `setup-code` 创建；明文 Docker bridge 初始化会被拒绝，即使只映射到宿主机回环。开发模式用同一数据库的 `admin-create`：隐藏输入密码 + Enter 两次。Agent `enroll` 隐藏输入令牌 + Enter 一次，无需手工 EOF。
+  Use HTTPS for web setup. Docker bridge is not native loopback; for local dev, `admin-create` uses hidden password + Enter twice. Agent enrollment uses hidden token + Enter once. Keep security checks enabled.
 
 ## 前提与镜像状态
 
@@ -307,7 +321,7 @@ docker compose -f deploy/compose.dev-http.yaml up -d --build server
 
 ```sh
 docker compose -f deploy/compose.dev-http.yaml \
-  exec server /app/ergent-server admin-create --username admin
+  exec server /app/ergent-server --database /data/server.db admin-create --username admin
 ```
 
 `docker compose exec` 默认保留 TTY。程序会隐藏密码输入，输入密码后按 Enter，再输入一次确认并按 Enter；无需 Ctrl-D/Ctrl-Z，不把密码放入参数、环境变量或 shell 历史。两次输入必须一致，密码为 12–1024 个 UTF-8 字节。失败时按错误提示重试，不要假定账户已经创建。

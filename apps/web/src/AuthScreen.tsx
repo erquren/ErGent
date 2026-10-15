@@ -212,6 +212,36 @@ export function AuthScreen({
                   {t(notice)}
                 </p>
               )}
+              {screen === "setup" && (
+                <aside
+                  className="setup-security"
+                  aria-labelledby="setup-security-title"
+                >
+                  <strong id="setup-security-title">{t("提交前请确认")}</strong>
+                  <ul>
+                    <li>
+                      {t(
+                        "使用 HTTPS，或已配置的 localhost / 127.0.0.1 回环 HTTP。远程可用 SSH 隧道，但服务器必须看到回环连接。",
+                      )}
+                    </li>
+                    <li>
+                      {t(
+                        "浏览器地址须与 --origin 的协议、主机和端口完全一致；localhost 与 127.0.0.1 不等同。",
+                      )}
+                    </li>
+                    <li>
+                      {t(
+                        "dev-http 不允许远程 HTTP 初始化；Docker 端口映射也可能是非回环连接。",
+                      )}
+                    </li>
+                    <li>
+                      {t(
+                        "也可在服务器终端对同一数据库运行 admin-create。CLI 仅替代初始化；请通过 HTTPS 或受保护的回环 / SSH 页面登录，勿在远程明文 HTTP 输入密码。",
+                      )}
+                    </li>
+                  </ul>
+                </aside>
+              )}
               <form
                 onSubmit={(event) => {
                   event.preventDefault();

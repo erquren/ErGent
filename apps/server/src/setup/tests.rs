@@ -89,18 +89,24 @@ async fn http_setup_requires_loopback_peer_and_loopback_forwarded_client() {
     let mut headers = headers(&app).await;
     headers.insert(header::ORIGIN, "http://localhost".parse().unwrap());
     headers.insert("x-real-ip", "127.0.0.1".parse().unwrap());
-    assert_error(
+    assert_origin_rejected(
         attempt(&app, headers.clone(), body(&code)).await,
-        StatusCode::FORBIDDEN,
-        "ORIGIN_REJECTED",
+        "HTTP setup requires a loopback connection and loopback client IP",
+    )
+    .await;
+    // A trusted remote proxy cannot make an HTTP connection local by claiming
+    // a loopback client. Both the transport peer and resolved client must be local.
+    app.trusted_proxies = vec!["192.0.2.1".parse().unwrap()];
+    assert_origin_rejected(
+        attempt(&app, headers.clone(), body(&code)).await,
+        "HTTP setup requires a loopback connection and loopback client IP",
     )
     .await;
     app.trusted_proxies = vec!["127.0.0.1".parse().unwrap()];
     headers.insert("x-real-ip", "203.0.113.5".parse().unwrap());
-    assert_error(
+    assert_origin_rejected(
         attempt_from(&app, "127.0.0.1:1234", headers.clone(), body(&code)).await,
-        StatusCode::FORBIDDEN,
-        "ORIGIN_REJECTED",
+        "HTTP setup requires a loopback connection and loopback client IP",
     )
     .await;
     headers.insert("x-real-ip", "::ffff:127.0.0.1".parse().unwrap());
@@ -181,6 +187,171 @@ async fn json_response(response: Response) -> serde_json::Value {
 async fn assert_error(response: Response, status: StatusCode, code: &str) {
     assert_eq!(response.status(), status);
     assert_eq!(json_response(response).await["error"]["code"], code);
+}
+
+async fn assert_origin_rejected(response: Response, reason: &str) {
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = json_response(response).await;
+    assert_eq!(response["error"]["code"], "ORIGIN_REJECTED");
+    let message = response["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains(reason),
+        "unexpected origin error: {message}"
+    );
+    assert!(message.contains(" / "), "origin guidance must be bilingual");
+    if reason.starts_with("Remote HTTP") || reason.starts_with("HTTP setup requires") {
+        for guidance in [
+            "admin-create only replaces setup",
+            "HTTPS or protected loopback/SSH for setup and login",
+            "never enter passwords over remote HTTP",
+            "切勿在远程 HTTP 页面输入密码",
+        ] {
+            assert!(message.contains(guidance), "missing guidance: {guidance}");
+        }
+    }
+    assert!(
+        !message.contains("://"),
+        "do not expose request/config origins"
+    );
+}
+
+#[tokio::test]
+async fn setup_origin_header_errors_are_specific_and_do_not_consume_the_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(&dir.path().join("server.db")).await;
+    let (_, code) = mint(&app, false).await;
+    let valid_headers = headers(&app).await;
+    let mut missing = valid_headers.clone();
+    missing.remove(header::ORIGIN);
+    assert_origin_rejected(
+        attempt(&app, missing, body(&code)).await,
+        "Missing Origin header",
+    )
+    .await;
+    let mut duplicate = valid_headers.clone();
+    duplicate.append(header::ORIGIN, "https://setup.example".parse().unwrap());
+    assert_origin_rejected(
+        attempt(&app, duplicate, body(&code)).await,
+        "Multiple Origin headers are not allowed",
+    )
+    .await;
+    for invalid in [
+        "null",
+        "https://setup.example/private-value",
+        "https://setup.example https://evil.example",
+        "http://192.168.1.2/private-value",
+        "https://setup.example/",
+    ] {
+        let mut malformed = valid_headers.clone();
+        malformed.insert(header::ORIGIN, invalid.parse().unwrap());
+        assert_origin_rejected(
+            attempt(&app, malformed, body(&code)).await,
+            "Invalid Origin",
+        )
+        .await;
+    }
+    let mut non_ascii = valid_headers.clone();
+    non_ascii.insert(
+        header::ORIGIN,
+        axum::http::HeaderValue::from_bytes(b"https://\xff.example").unwrap(),
+    );
+    assert_origin_rejected(
+        attempt(&app, non_ascii, body(&code)).await,
+        "Invalid Origin",
+    )
+    .await;
+    assert!(required(&app.db).await.unwrap());
+    assert_eq!(
+        attempt(&app, valid_headers, body(&code)).await.status(),
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn setup_requires_exact_scheme_host_and_port_even_with_allow_any_origin() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app(&dir.path().join("server.db")).await;
+    app.origin = "https://localhost:7777".into();
+    app.allowed_origins = vec![app.origin.clone()];
+    app.allow_any_origin = true;
+    let (_, code) = mint(&app, false).await;
+    let mut headers = headers(&app).await;
+    for mismatch in [
+        "http://localhost:7777",
+        "https://127.0.0.1:7777",
+        "https://localhost:7778",
+    ] {
+        headers.insert(header::ORIGIN, mismatch.parse().unwrap());
+        assert_origin_rejected(
+            attempt_from(&app, "127.0.0.1:1234", headers.clone(), body(&code)).await,
+            "Origin does not exactly match a configured origin (scheme, host, port)",
+        )
+        .await;
+    }
+    headers.insert(header::ORIGIN, app.origin.parse().unwrap());
+    assert_eq!(
+        attempt(&app, headers, body(&code)).await.status(),
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn setup_rejects_remote_http_with_recovery_guidance_even_when_allowlisted() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app(&dir.path().join("server.db")).await;
+    app.allow_any_origin = true;
+    let (_, code) = mint(&app, false).await;
+    let valid_headers = headers(&app).await;
+    for remote in [
+        "http://192.168.1.2:7777",
+        "http://100.104.72.32:7777",
+        "http://setup.example",
+        "http://203.0.113.5",
+    ] {
+        // LAN opt-in may place HTTP origins in the general allowlist. Setup
+        // remains stricter, regardless of the origin and transport combination.
+        app.allowed_origins.push(remote.into());
+        let mut headers = valid_headers.clone();
+        headers.insert(header::ORIGIN, remote.parse().unwrap());
+        assert_origin_rejected(
+            attempt_from(&app, "127.0.0.1:1234", headers, body(&code)).await,
+            "Remote HTTP cannot create the first account. admin-create only replaces setup",
+        )
+        .await;
+    }
+    assert!(required(&app.db).await.unwrap());
+    let failures: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM setup_ip_limits")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(failures, 0);
+    assert_eq!(
+        attempt(&app, valid_headers, body(&code)).await.status(),
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn setup_console_explains_origin_and_transport_requirements_early() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(&dir.path().join("server.db")).await;
+    let mut output = Vec::new();
+    assert_eq!(
+        issue_code_to(&app.db, false, &mut output).await.unwrap(),
+        Issuance::Issued
+    );
+    let output = String::from_utf8(output).unwrap();
+    for guidance in [
+        "scheme, host, port",
+        "Remote HTTP cannot create the first account",
+        "admin-create only replaces setup",
+        "HTTPS or protected loopback/SSH for setup and login",
+        "never enter passwords over remote HTTP",
+        "切勿在远程 HTTP 页面输入密码",
+        "远程 HTTP 无法创建首个账号",
+    ] {
+        assert!(output.contains(guidance), "missing guidance: {guidance}");
+    }
 }
 
 #[tokio::test]

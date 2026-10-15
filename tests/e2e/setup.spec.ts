@@ -9,7 +9,7 @@ const dist = resolve("apps/web/dist");
 
 // Exercise the production web build without changing the existing real-server
 // workspace fixture. Real empty-database coverage lives in setup-integration.
-async function mockServer(page: Page) {
+async function mockServer(page: Page, serverOrigin = origin) {
   const state = {
     required: true,
     status: 200,
@@ -26,7 +26,7 @@ async function mockServer(page: Page) {
     loginPosts: [] as Record<string, string>[],
   };
   await page.routeWebSocket("**/api/v1/ws/browser", () => {});
-  await page.route(`${origin}/**`, async (route) => {
+  await page.route(`${serverOrigin}/**`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     state.requests.push(`${request.method()} ${url.pathname}${url.search}`);
@@ -152,6 +152,91 @@ test("setup waits for account status without flashing login or setup", async ({
   expect(state.requests).not.toContain("GET /api/v1/auth/me");
 });
 
+for (const serverOrigin of [
+  "https://setup.ergent.test",
+  "http://localhost:7777",
+  "http://127.0.0.1:7777",
+]) {
+  for (const language of ["zh", "en"]) {
+    test(`setup explains security before submission in ${language} without blocking ${serverOrigin}`, async ({
+      page,
+    }) => {
+      const state = await mockServer(page, serverOrigin);
+      await page.goto(serverOrigin);
+      if (language === "en") {
+        await page
+          .getByRole("button", { name: "界面语言", exact: true })
+          .click();
+        await page
+          .getByRole("button", { name: "English", exact: true })
+          .click();
+      }
+      const guidance = page.getByRole("complementary", {
+        name:
+          language === "en" ? "Before you create an account" : "提交前请确认",
+      });
+      await expect(guidance).toBeVisible();
+      await expect(guidance.getByRole("listitem")).toHaveCount(4);
+      for (const text of language === "en"
+        ? [
+            "Use HTTPS or configured localhost / 127.0.0.1 loopback HTTP",
+            "an SSH tunnel must reach the server over loopback",
+            "match --origin exactly: scheme, host and port",
+            "localhost and 127.0.0.1 are different hosts",
+            "dev-http does not allow remote HTTP setup",
+            "Docker port mapping may still use a non-loopback connection",
+            "run admin-create in the server terminal with the same database",
+            "CLI creation only replaces setup",
+            "sign in over HTTPS or protected loopback / SSH",
+            "Never enter passwords over remote plain HTTP",
+          ]
+        : [
+            "使用 HTTPS，或已配置的 localhost / 127.0.0.1 回环 HTTP",
+            "SSH 隧道，但服务器必须看到回环连接",
+            "--origin 的协议、主机和端口完全一致",
+            "localhost 与 127.0.0.1 不等同",
+            "dev-http 不允许远程 HTTP 初始化",
+            "Docker 端口映射也可能是非回环连接",
+            "在服务器终端对同一数据库运行 admin-create",
+            "CLI 仅替代初始化",
+            "通过 HTTPS 或受保护的回环 / SSH 页面登录",
+            "勿在远程明文 HTTP 输入密码",
+          ])
+        await expect(guidance).toContainText(text);
+      expect(
+        await guidance.evaluate(
+          (element) =>
+            !!(
+              element.compareDocumentPosition(document.querySelector("form")!) &
+              Node.DOCUMENT_POSITION_FOLLOWING
+            ),
+        ),
+      ).toBeTruthy();
+      expect(state.setupPosts).toHaveLength(0);
+
+      // The notice is advisory: the server still decides whether setup is safe.
+      await page.locator('input[name="password"]').fill(password);
+      await page.locator('input[name="passwordConfirmation"]').fill(password);
+      await page.locator('input[name="setupCode"]').fill(setupCode);
+      const submit = page.getByRole("button", {
+        name: language === "en" ? "Create account" : "创建账户",
+        exact: true,
+      });
+      await expect(submit).toBeEnabled();
+      await submit.click();
+      await expect(
+        page.getByRole("heading", {
+          name: language === "en" ? "Open your workspace" : "进入你的工作台",
+        }),
+      ).toBeVisible();
+      expect(state.setupPosts).toHaveLength(1);
+      await expect(guidance).toHaveCount(0);
+      await expect(page.locator('input[name="password"]')).toHaveValue("");
+      await expect(page.locator('input[name="setupCode"]')).toHaveCount(0);
+    });
+  }
+}
+
 for (const failure of [
   "setup unavailable",
   "malformed status",
@@ -201,6 +286,7 @@ test("existing-account login remains available and restores authenticated sessio
   );
   await expect(page.getByLabel("确认密码")).toHaveCount(0);
   await expect(page.getByLabel("一次性初始化码")).toHaveCount(0);
+  await expect(page.locator(".setup-security")).toHaveCount(0);
   state.meStatus = 200;
   await page.reload();
   await expect(
@@ -318,6 +404,34 @@ test("setup errors remain retryable and a completed setup in another tab switche
     "初始化已完成。请使用已创建的账户登录。",
   );
   await expect(page.getByLabel("密码", { exact: true })).toHaveValue("");
+});
+
+test("setup preserves a specific server security rejection and lets the user retry", async ({
+  page,
+}) => {
+  const state = await mockServer(page);
+  state.postStatus = 403;
+  state.postMessage =
+    "Remote HTTP cannot create the first account. admin-create only replaces setup. Use HTTPS or protected loopback/SSH for setup and login; never enter passwords over remote HTTP. / 远程 HTTP 无法创建首个账号；admin-create 仅替代初始化。初始化及后续登录均须使用 HTTPS 或受保护的回环/SSH 页面，切勿在远程 HTTP 页面输入密码。";
+  await page.goto(origin);
+  await fillSetup(page);
+  await page.getByRole("button", { name: "创建账户", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText(state.postMessage);
+  await expect(
+    page.getByRole("complementary", { name: "提交前请确认" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "创建账户", exact: true }),
+  ).toBeEnabled();
+  expect(state.setupPosts).toHaveLength(1);
+  expect(state.loginPosts).toHaveLength(0);
+  await page.getByRole("button", { name: "界面语言", exact: true }).click();
+  await page.getByRole("button", { name: "English", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText(state.postMessage);
+  await expect(
+    page.getByRole("complementary", { name: "Before you create an account" }),
+  ).toBeVisible();
+  expect(state.setupPosts).toHaveLength(1);
 });
 
 test("setup refresh clears secrets and keeps language and appearance controls", async ({

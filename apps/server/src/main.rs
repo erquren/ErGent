@@ -21,6 +21,10 @@ use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
 #[derive(Parser)]
+#[command(
+    about = "ErGent 服务端 / Server",
+    after_help = "部署包 / Package: ./start-server.sh --tls-mode dev-http (无需 run / omit run).\n直接运行 / Binary: ergent-server run --web ./web.\n同一数据库 / Same database: pass --database PATH to run, setup-code and admin-create."
+)]
 struct Cli {
     #[arg(
         long,
@@ -28,6 +32,7 @@ struct Cli {
         default_value = ".local/server.db",
         global = true
     )]
+    /// SQLite 路径，所有管理命令保持一致 / SQLite path; reuse for all commands.
     database: PathBuf,
     #[command(subcommand)]
     command: Command,
@@ -41,49 +46,61 @@ enum TlsMode {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Rotate the first-account setup code; display only on the controlling terminal.
+    /// 领取/轮换初始化码（实际终端）/ Issue or rotate setup code (TTY).
     SetupCode,
-    /// Hidden password + confirmation in a terminal; single stdin value in pipelines.
+    /// 隐藏密码，回车并确认 / Hidden password, Enter, then confirm.
     AdminCreate {
         #[arg(long, default_value = "admin")]
+        /// 用户名 / Username.
         username: String,
     },
-    /// Clear an IP's login throttle and atomically record an audit event.
+    /// 清除 IP 登录限制并审计 / Unblock login IP with audit.
     LoginUnblock {
+        /// 客户端 IP / Client IP.
         ip: std::net::IpAddr,
-        /// Operator label saved in the local audit trail.
+        /// 操作人（写入审计）/ Operator for audit.
         #[arg(long)]
         actor: String,
         #[arg(long)]
+        /// 原因（写入审计）/ Reason for audit.
         reason: String,
     },
+    #[command(
+        about = "启动服务 / Start server",
+        after_help = "部署包推荐 / Package: ./start-server.sh --tls-mode proxy --origin https://example.com\n本机开发 / Local: ./start-server.sh --tls-mode dev-http\n--origin 不启用 TLS / does not enable TLS. direct needs --tls-cert + --tls-key; proxy requires an HTTPS reverse proxy.\n首次设置 / First setup: exact HTTPS or loopback HTTP (SSH). admin-create only replaces setup; log in over HTTPS/SSH."
+    )]
     Run {
         #[command(flatten)]
         login_policy: login_guard::Policy,
         #[arg(long, env = "ERGENT_LISTEN", default_value = "127.0.0.1:7777")]
+        /// 监听地址 / Bind address.
         listen: std::net::SocketAddr,
         #[arg(long, env = "ERGENT_ORIGIN", default_value = "http://127.0.0.1:7777")]
+        /// 浏览器精确地址，不启用 TLS / Exact browser origin; does not enable TLS.
         origin: String,
-        /// Additional exact browser origins; no wildcard matching.
+        /// 额外精确来源，无通配符 / Extra exact origins; no wildcards.
         #[arg(long, env = "ERGENT_ADDITIONAL_ORIGINS", value_delimiter = ',')]
         additional_origin: Vec<String>,
-        /// Exact proxy peer IPs allowed to supply an overwritten X-Real-IP header.
+        /// 可信代理精确 IP，须覆盖 X-Real-IP / Exact proxy IP; must overwrite X-Real-IP.
         #[arg(long, env = "ERGENT_TRUSTED_PROXY", value_delimiter = ',')]
         trusted_proxy: Vec<std::net::IpAddr>,
-        /// Allow HTTP on explicitly configured private IPv4 LAN origins.
+        /// 私有 IPv4 HTTP，仅测试，不放宽首次设置 / Private IPv4 HTTP; setup remains restricted.
         #[arg(long)]
         allow_insecure_lan: bool,
-        /// Development opt-in: accept browser requests from any Origin.
+        /// 开发专用任意来源，不放宽首次设置 / Dev-only any origin; setup remains restricted.
         #[arg(long)]
         allow_any_origin: bool,
         #[arg(long, env = "ERGENT_WEB", default_value = "apps/web/dist")]
+        /// 网页目录；部署包用 ./web / Static directory; package uses ./web.
         web: PathBuf,
-        /// Direct requires certificate files; proxy requires TLS termination upstream.
+        /// direct=原生 TLS / native TLS; proxy=TLS 反代 / TLS proxy; dev-http=本机 HTTP / local HTTP.
         #[arg(long, env = "ERGENT_TLS_MODE", value_enum)]
         tls_mode: Option<TlsMode>,
         #[arg(long, env = "ERGENT_TLS_CERT", requires = "tls_key")]
+        /// PEM 证书链（direct）/ PEM certificate chain (direct).
         tls_cert: Option<PathBuf>,
         #[arg(long, env = "ERGENT_TLS_KEY", requires = "tls_cert")]
+        /// PEM 私钥（direct）/ PEM private key (direct).
         tls_key: Option<PathBuf>,
     },
 }
@@ -376,7 +393,10 @@ async fn main() -> anyhow::Result<()> {
                 .with_state(app);
             let shutdown = shutdown_signal();
             let listener = tokio::net::TcpListener::bind(listen).await?;
-            tracing::info!(%listen, %origin, "Ergent preview server ready");
+            if !web.join("index.html").is_file() {
+                tracing::warn!(web = %web.display(), "未找到网页 index.html；部署包请用 start-server.sh 或 --web ./web / Missing web index.html; use start-server.sh or --web ./web");
+            }
+            tracing::info!(%listen, %origin, transport = if direct_tls { "https" } else { "http" }, web = %web.display(), "ErGent 服务已启动 / Server ready");
             let serve = async move {
                 let service = router.into_make_service_with_connect_info::<std::net::SocketAddr>();
                 if let Some(config) = tls_config {

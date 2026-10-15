@@ -12,9 +12,9 @@ use zeroize::Zeroizing;
 
 const PASSWORD_MAX: usize = 1024;
 const TOKEN_MAX: usize = 256;
-const PASSWORD_PROMPT: &str = "请输入管理员密码（12–1024 字节，输入隐藏，回车结束）：";
-const CONFIRM_PROMPT: &str = "请再次输入管理员密码（输入隐藏，回车结束）：";
-const TOKEN_PROMPT: &str = "请输入一次性注册令牌（输入隐藏，回车结束）：";
+const PASSWORD_PROMPT: &str = "管理员密码 / Password (12–1024 bytes, hidden, Enter)：";
+const CONFIRM_PROMPT: &str = "确认密码 / Confirm password (hidden, Enter)：";
+const TOKEN_PROMPT: &str = "注册令牌 / Enrollment token (hidden, Enter)：";
 
 #[derive(Clone, Copy)]
 struct SecretSpec {

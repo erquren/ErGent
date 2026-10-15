@@ -1730,3 +1730,24 @@ button:hover {
 .login-form.setup-form {
   padding-top: 76px;
 }
+.setup-security {
+  margin: -16px 0 24px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-soft);
+  color: var(--secondary);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.setup-security strong {
+  color: var(--text);
+}
+.setup-security ul {
+  margin: 6px 0 0;
+  padding-left: 16px;
+}
+.setup-security li + li {
+  margin-top: 5px;
+}

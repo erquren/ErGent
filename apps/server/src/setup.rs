@@ -67,12 +67,12 @@ async fn issue_code_to(
         .await?;
     writeln!(
         output,
-        "\nErGent first-account setup (expires in 15 minutes)."
+        "\nErGent first-account setup / 首次账号设置 (expires in 15 minutes / 15 分钟有效)."
     )?;
     writeln!(output, "Setup code: {code}")?;
     writeln!(
         output,
-        "Open the configured localhost HTTP or HTTPS origin. Keep this code private.\n"
+        "Use the exact configured origin (scheme, host, port). Keep this code private.\n使用与配置完全一致的来源（协议、主机、端口），请勿泄露初始化码。\nRemote HTTP cannot create the first account. admin-create only replaces setup.\nUse HTTPS or protected loopback/SSH for setup and login; never enter passwords over remote HTTP.\n远程 HTTP 无法创建首个账号；admin-create 仅替代初始化。\n初始化及后续登录均须使用 HTTPS 或受保护的回环/SSH 页面，切勿在远程 HTTP 页面输入密码。\n"
     )?;
     output.flush()?;
     tx.commit().await?;
@@ -154,24 +154,66 @@ pub struct Setup {
     setup_code: String,
 }
 
-fn origin_rejected() -> ApiError {
-    ApiError::new(
-        StatusCode::FORBIDDEN,
-        "ORIGIN_REJECTED",
-        "首次设置必须使用已配置的本机 HTTP 或 HTTPS 来源",
-    )
+enum OriginRejection {
+    Missing,
+    Multiple,
+    Invalid,
+    Mismatch,
+    RemoteHttp,
+    HttpTransport,
+}
+
+fn origin_rejected(reason: OriginRejection) -> ApiError {
+    // Static messages never reflect request headers, configured origins or codes.
+    let message = match reason {
+        OriginRejection::Missing => {
+            "Missing Origin header. Open setup from the configured browser origin. / 缺少 Origin 请求头；请从已配置来源的浏览器页面进行首次设置。"
+        }
+        OriginRejection::Multiple => {
+            "Multiple Origin headers are not allowed. Send exactly one Origin. / 不允许多个 Origin 请求头；请仅发送一个 Origin。"
+        }
+        OriginRejection::Invalid => {
+            "Invalid Origin. Use a complete HTTP(S) origin without a path. / Origin 无效；请使用不带路径的完整 HTTP(S) 来源。"
+        }
+        OriginRejection::Mismatch => {
+            "Origin does not exactly match a configured origin (scheme, host, port). / Origin 与已配置来源不完全一致，请核对协议、主机和端口。"
+        }
+        OriginRejection::RemoteHttp => {
+            "Remote HTTP cannot create the first account. admin-create only replaces setup. Use HTTPS or protected loopback/SSH for setup and login; never enter passwords over remote HTTP. / 远程 HTTP 无法创建首个账号；admin-create 仅替代初始化。初始化及后续登录均须使用 HTTPS 或受保护的回环/SSH 页面，切勿在远程 HTTP 页面输入密码。"
+        }
+        OriginRejection::HttpTransport => {
+            "HTTP setup requires a loopback connection and loopback client IP, including through trusted proxies. admin-create only replaces setup. Use HTTPS or protected loopback/SSH for setup and login; never enter passwords over remote HTTP. / HTTP 首次设置要求连接来源及客户端 IP 均为回环地址，可信代理亦不例外。admin-create 仅替代初始化；初始化及后续登录均须使用 HTTPS 或受保护的回环/SSH 页面，切勿在远程 HTTP 页面输入密码。"
+        }
+    };
+    ApiError::new(StatusCode::FORBIDDEN, "ORIGIN_REJECTED", message)
 }
 
 fn strict_origin(app: &App, headers: &HeaderMap) -> Result<bool, ApiError> {
     let mut origins = headers.get_all(header::ORIGIN).iter();
-    let origin = origins.next().and_then(|value| value.to_str().ok());
-    if origins.next().is_some()
-        || !crate::origin::request_allowed(false, origin, &app.allowed_origins)
-        || !origin.is_some_and(|value| crate::origin::validate(value, false).is_ok())
-    {
-        return Err(origin_rejected());
+    let origin = origins
+        .next()
+        .ok_or_else(|| origin_rejected(OriginRejection::Missing))?;
+    if origins.next().is_some() {
+        return Err(origin_rejected(OriginRejection::Multiple));
     }
-    Ok(origin.is_some_and(|value| value.starts_with("http:")))
+    let origin = origin
+        .to_str()
+        .map_err(|_| origin_rejected(OriginRejection::Invalid))?;
+    if crate::origin::validate(origin, false).is_err() {
+        let remote_http = url::Url::parse(origin).is_ok_and(|url| {
+            url.scheme() == "http" && url.origin().ascii_serialization() == origin
+        });
+        return Err(origin_rejected(if remote_http {
+            OriginRejection::RemoteHttp
+        } else {
+            OriginRejection::Invalid
+        }));
+    }
+    // General allow-any-origin / insecure-LAN options never relax first setup.
+    if !crate::origin::request_allowed(false, Some(origin), &app.allowed_origins) {
+        return Err(origin_rejected(OriginRejection::Mismatch));
+    }
+    Ok(origin.starts_with("http:"))
 }
 
 fn invalid_code() -> ApiError {
@@ -212,7 +254,7 @@ pub async fn create(
     // HTTP setup must be local at both ends of a trusted proxy; HTTPS deployments
     // must terminate TLS at the configured origin and keep this backend private.
     if loopback_http && (!login_guard::normalize(peer.ip()).is_loopback() || !ip.is_loopback()) {
-        return Err(origin_rejected());
+        return Err(origin_rejected(OriginRejection::HttpTransport));
     }
     let session = auth::cookie(&headers).ok_or_else(ApiError::unauthorized)?;
     let row = sqlx::query(

@@ -10,17 +10,20 @@ use std::{
     net::IpAddr,
 };
 
-/// A fixed failure window. A backoff already issued always runs to its deadline.
+// A fixed failure window. A backoff already issued always runs to its deadline.
 #[derive(Clone, Debug, clap::Args)]
 pub struct Policy {
-    /// Failure-count window, measured from its first failure.
+    /// 失败计数窗口（秒）/ Failure window (seconds).
     #[arg(long = "login-window-seconds", default_value_t = 900, value_parser = clap::value_parser!(u32).range(1..=86400))]
     pub window_seconds: u32,
     #[arg(long = "login-failure-threshold", default_value_t = 5, value_parser = clap::value_parser!(u32).range(1..=1000000))]
+    /// 失败次数阈值 / Failure threshold.
     pub failure_threshold: u32,
     #[arg(long = "login-backoff-seconds", default_value_t = 30, value_parser = clap::value_parser!(u32).range(1..=86400))]
+    /// 初始退避（秒）/ Initial backoff (seconds).
     pub backoff_seconds: u32,
     #[arg(long = "login-max-backoff-seconds", default_value_t = 900, value_parser = clap::value_parser!(u32).range(1..=86400))]
+    /// 最大退避（秒）/ Maximum backoff (seconds).
     pub max_backoff_seconds: u32,
 }
 
