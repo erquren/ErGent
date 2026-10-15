@@ -341,8 +341,10 @@ test("setup refresh clears secrets and keeps language and appearance controls", 
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   for (const label of ["Password", "Confirm password", "One-time setup code"])
     await expect(page.getByLabel(label, { exact: true })).toHaveValue("");
+  const desktopScreenshot = test.info().outputPath("setup-desktop.png");
+  await page.screenshot({ path: desktopScreenshot, fullPage: true });
   await test.info().attach("First-account setup, desktop", {
-    body: await page.screenshot({ fullPage: true }),
+    path: desktopScreenshot,
     contentType: "image/png",
   });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -354,4 +356,10 @@ test("setup refresh clears secrets and keeps language and appearance controls", 
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBeTruthy();
+  const mobileScreenshot = test.info().outputPath("setup-mobile.png");
+  await page.screenshot({ path: mobileScreenshot, fullPage: true });
+  await test.info().attach("First-account setup, mobile", {
+    path: mobileScreenshot,
+    contentType: "image/png",
+  });
 });

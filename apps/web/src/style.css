@@ -899,6 +899,9 @@ p {
 }
 .login-form {
   display: grid;
+  /* Let the form shrink below the card's preferred width on narrow screens. */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   place-items: center;
   padding: 40px;
   background: #fafbf9;
@@ -906,6 +909,7 @@ p {
 .login-box {
   width: 330px;
   max-width: 100%;
+  min-width: 0;
 }
 .login-box h2 {
   font-size: 25px;
