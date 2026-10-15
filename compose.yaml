@@ -1,0 +1,38 @@
+# Default deployment: Server + web with native HTTPS, no Nginx required.
+# Supply an existing certificate directory; this does not issue certificates.
+# See docs/docker.md before starting.
+name: ergent
+
+services:
+  server:
+    image: "${ERGENT_IMAGE:-ergent-server:local}"
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    ports:
+      - "${ERGENT_HTTPS_PORT:-443}:7777"
+    volumes:
+      - server-data:/data
+      - type: bind
+        source: "${ERGENT_CERT_DIR:?Set ERGENT_CERT_DIR to an existing certificate directory readable by UID 10001}"
+        target: /certs
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      ERGENT_TLS_MODE: direct
+      ERGENT_ORIGIN: "${ERGENT_ORIGIN:?Set ERGENT_ORIGIN to your exact public HTTPS origin}"
+      ERGENT_TLS_CERT: /certs/fullchain.pem
+      ERGENT_TLS_KEY: /certs/privkey.pem
+    stop_grace_period: 30s
+
+volumes:
+  server-data:

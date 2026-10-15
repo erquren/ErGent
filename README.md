@@ -21,6 +21,12 @@
 
 解压后启动 Server，首次打开网页时使用服务器控制终端显示的一次性初始化码，填写用户名及两次密码创建首个账户；已有账户则直接登录，再从网页获取一次性令牌接入 Agent。详见 [发布包使用说明](scripts/release/README.md)。AI CLI 需自行安装在 Agent 所在机器。
 
+### Docker 部署 Server 与网页
+
+仓库提供 Server + 网页的单容器镜像与 Compose 示例，通过环境变量配置，挂载现有证书即可使用原生 HTTPS；Nginx 可选，Agent 仍在开发机器上原生运行。数据保存在独立卷，证书只读挂载，不自动申请或续期。
+
+首次使用可从源码构建 `ergent-server:local`；镜像仓库实际发布后可直接拉取指定版本/摘要。完整配置、私有 CA/IP 证书、交互初始化、可选 Nginx/本机 dev-http、备份与升级步骤见 [Docker 部署指南](docs/docker.md)。请勿假定尚未发布的镜像已经可用。
+
 ### 从源码运行
 
 需要 Rust 1.98.1、Node.js 22、pnpm 10.17.1 和 Python 3。
@@ -56,7 +62,7 @@ python3 scripts/dev.py
 ## 安全与使用边界
 
 - 终端以 Agent 当前用户的权限运行。不自动安装或登录 AI CLI。
-- 公网部署使用 HTTPS 反向代理，并设置正确的 `--origin`；跨机器 Agent 连接必须使用 HTTPS。不要在公网启用 `--allow-any-origin`。
+- 公网部署使用原生 HTTPS（配置现有证书/私钥）或 HTTPS 反向代理，并设置正确的 `--origin`；跨机器 Agent 连接必须使用 HTTPS。不要在公网启用 `--allow-any-origin`。
 - 登录按来源 IP 使用时间窗口和指数退避：默认 15 分钟内第 5 次失败后等待 30 秒，继续失败逐次翻倍，单次最多 15 分钟。成功登录清零；重启保留尚未到期的限制。可用 `ergent-server --database .local/server.db login-unblock IP --actor 操作人 --reason 原因` 解锁并记录审计。配置、升级和审计查询见 [发布包使用说明](scripts/release/README.md#登录保护与审计)。代理部署需配置 `--trusted-proxy`，并由代理覆盖 `X-Real-IP`。
 - 关闭网页不结束终端；Agent 或机器重启后不能恢复原进程。终端浏览器保留最多 2,000 行滚动历史；短暂断线可从每会话 512 KiB 内存重放缓存继续，超出缓存或尺寸/Agent 变化时只恢复当前画面。完整历史不持久化，详见 [终端恢复与保留边界](TERMINAL_RECOVERY.md)。更新前请保存工作并备份数据。
 - 发布包为可解压运行的程序，未配置 Windows 签名或 macOS 签名、公证。平台要求和部署细节见 [发布包使用说明](scripts/release/README.md)。

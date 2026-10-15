@@ -1,0 +1,32 @@
+# Optional standalone alternative: reuse an existing Nginx on the Docker host.
+# Do not merge this file with ../compose.yaml: native TLS and proxy modes differ.
+# From the repository root:
+# docker compose --env-file .env -f deploy/compose.host-proxy.yaml up -d --build
+name: ergent
+
+services:
+  server:
+    image: "${ERGENT_IMAGE:-ergent-server:local}"
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    ports:
+      - "127.0.0.1:7777:7777"
+    volumes:
+      - server-data:/data
+    environment:
+      ERGENT_TLS_MODE: proxy
+      ERGENT_ORIGIN: "${ERGENT_ORIGIN:?Set ERGENT_ORIGIN to your exact public HTTPS origin}"
+      ERGENT_TRUSTED_PROXY: "${ERGENT_TRUSTED_PROXY:?Set ERGENT_TRUSTED_PROXY to the exact proxy peer IP seen by the server}"
+    stop_grace_period: 30s
+
+volumes:
+  server-data:

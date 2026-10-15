@@ -24,6 +24,11 @@ use std::{
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
+async fn cancelled(shutdown: &mut watch::Receiver<bool>) {
+    // Discard watch::Ref before returning so select branches remain Send.
+    let _ = shutdown.wait_for(|stopped| *stopped).await;
+}
+
 fn protocol(headers: &HeaderMap) -> Result<(), ApiError> {
     if !headers
         .get("sec-websocket-protocol")
@@ -56,11 +61,12 @@ pub async fn agent_upgrade(
         .ok_or_else(ApiError::unauthorized)?;
     let machine: String = row.get("id");
     let owner: String = row.get("owner_id");
+    let shutdown = app.connections.register()?;
     Ok(ws
         .protocols([SUBPROTOCOL])
         .max_message_size(MAX_MESSAGE)
         .max_frame_size(MAX_MESSAGE)
-        .on_upgrade(move |socket| agent_socket(app, socket, machine, owner)))
+        .on_upgrade(move |socket| agent_socket(app, socket, machine, owner, shutdown)))
 }
 pub async fn browser_upgrade(
     State(app): State<App>,
@@ -70,11 +76,14 @@ pub async fn browser_upgrade(
     protocol(&headers)?;
     auth::origin(&app, &headers)?;
     let identity = auth::identity(&app, &headers, false).await?;
+    let shutdown = app.connections.register()?;
     Ok(ws
         .protocols([SUBPROTOCOL])
         .max_message_size(MAX_MESSAGE)
         .max_frame_size(MAX_MESSAGE)
-        .on_upgrade(move |socket| browser_socket(app, socket, identity.user, identity.token_hash)))
+        .on_upgrade(move |socket| {
+            browser_socket(app, socket, identity.user, identity.token_hash, shutdown)
+        }))
 }
 async fn send<T: serde::Serialize>(socket: &mut WebSocket, value: &T) -> Result<(), ()> {
     let data = serde_json::to_string(value).map_err(|_| ())?;
@@ -98,7 +107,16 @@ async fn ping(socket: &mut WebSocket) -> Result<(), ()> {
     .map_err(|_| ())?
     .map_err(|_| ())
 }
-async fn agent_socket(app: App, mut socket: WebSocket, machine: String, owner: String) {
+async fn agent_socket(
+    app: App,
+    mut socket: WebSocket,
+    machine: String,
+    owner: String,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    if *shutdown.borrow() {
+        return;
+    }
     let connection = Uuid::new_v4().to_string();
     let (tx, mut rx) = mpsc::channel(64);
     let (stop, mut stopped) = watch::channel(false);
@@ -127,6 +145,7 @@ async fn agent_socket(app: App, mut socket: WebSocket, machine: String, owner: S
     let mut inventory_started: Option<Instant> = None;
     loop {
         tokio::select! {
+            _ = cancelled(&mut shutdown) => break,
             _ = stopped.changed() => break,
             _ = heartbeat.tick() => { if inventory_started.is_some_and(|t|t.elapsed()>Duration::from_secs(TRANSFER_TIMEOUT_SECS)) || last.elapsed()>Duration::from_secs(45) || ping(&mut socket).await.is_err() { break; } }
             command = rx.recv() => { let Some(command)=command else { break }; if send(&mut socket,&command).await.is_err() { break; } }
@@ -396,7 +415,16 @@ async fn send_browser_event(
         send(socket, event).await
     }
 }
-async fn browser_socket(app: App, mut socket: WebSocket, owner: String, auth_hash: String) {
+async fn browser_socket(
+    app: App,
+    mut socket: WebSocket,
+    owner: String,
+    auth_hash: String,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    if *shutdown.borrow() {
+        return;
+    }
     let viewer_id = Uuid::new_v4().to_string();
     let (tx, mut rx) = mpsc::channel(64);
     let (stop, mut stopped) = watch::channel(false);
@@ -418,10 +446,11 @@ async fn browser_socket(app: App, mut socket: WebSocket, owner: String, auth_has
     }
     let mut transfer_id = 0;
     if let Ok(event) = app.inventory(&owner).await {
-        if send_browser_event(&mut socket, &event, &mut transfer_id)
-            .await
-            .is_err()
-        {
+        let result = tokio::select! {
+            _ = cancelled(&mut shutdown) => Err(()),
+            result = send_browser_event(&mut socket, &event, &mut transfer_id) => result,
+        };
+        if result.is_err() {
             cleanup(&app, &viewer_id, &owner).await;
             return;
         }
@@ -430,12 +459,20 @@ async fn browser_socket(app: App, mut socket: WebSocket, owner: String, auth_has
     let mut last = Instant::now();
     loop {
         tokio::select! {
+            _=cancelled(&mut shutdown)=>break,
             _=stopped.changed()=>break,
             _=heartbeat.tick()=>{
                 let valid=sqlx::query_scalar::<_,i64>("SELECT count(*) FROM web_sessions WHERE token_hash=? AND expires_at>?").bind(&auth_hash).bind(now()).fetch_one(&app.db).await.unwrap_or(0)>0;
                 if !valid||last.elapsed()>Duration::from_secs(45)||ping(&mut socket).await.is_err(){break;}
             }
-            event=rx.recv()=>{let Some(event)=event else{break};if send_browser_event(&mut socket,&event,&mut transfer_id).await.is_err(){break;}}
+            event=rx.recv()=>{
+                let Some(event)=event else{break};
+                let sent = tokio::select! {
+                    _ = cancelled(&mut shutdown) => Err(()),
+                    result = send_browser_event(&mut socket, &event, &mut transfer_id) => result,
+                };
+                if sent.is_err(){break;}
+            }
             message=socket.recv()=>{
                 let Some(Ok(message))=message else{break};last=Instant::now();
                 if let Message::Text(text)=message {

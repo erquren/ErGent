@@ -1,4 +1,5 @@
 mod close_requests;
+mod tls;
 mod tool_events;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -12,7 +13,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    io::{Read, Write},
+    io::Write,
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
@@ -26,12 +27,16 @@ use uuid::Uuid;
 struct Cli {
     #[arg(long, default_value = ".local/agent.json", global = true)]
     config: PathBuf,
+    /// 为 HTTPS/WSS 加载额外的 PEM CA 证书；enroll 保存证书文件的绝对路径。
+    /// run 时仅在本次运行中覆盖已保存的路径，不修改配置文件。
+    #[arg(long, value_name = "PATH", global = true)]
+    ca_cert: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Reads a one-time enrollment token from stdin.
+    /// 隐藏输入一次性注册令牌，回车结束；管道或文件输入兼容 EOF。
     Enroll {
         #[arg(long)]
         server: String,
@@ -62,6 +67,8 @@ struct Config {
     server: String,
     machine_id: String,
     secret: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ca_cert: Option<PathBuf>,
 }
 fn server_url(server: &str) -> Result<url::Url> {
     let u = url::Url::parse(server)?;
@@ -108,14 +115,11 @@ async fn main() -> Result<()> {
                 !cli.config.exists(),
                 "配置文件已存在；请使用不同 --config 路径注册其他设备"
             );
-            eprintln!("从标准输入读取一次性注册 token，完成后 EOF：");
-            let mut token = String::new();
-            std::io::stdin().take(256).read_to_string(&mut token)?;
-            let client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(15))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()?;
-            let response=client.post(format!("{server}/api/v1/agent/enroll")).json(&json!({"enrollmentToken":token.trim(),"name":name,"os":std::env::consts::OS,"arch":std::env::consts::ARCH})).send().await?;
+            // Validate explicit trust before reading or transmitting the enrollment token.
+            let tls = tls::AgentTls::new(cli.ca_cert.as_deref())?;
+            let client = tls.http_client()?;
+            let token = ergent_cli_input::read_enrollment_token()?;
+            let response=client.post(format!("{server}/api/v1/agent/enroll")).json(&json!({"enrollmentToken":token,"name":name,"os":std::env::consts::OS,"arch":std::env::consts::ARCH})).send().await?;
             if !response.status().is_success() {
                 bail!("注册失败：HTTP {}", response.status());
             }
@@ -130,6 +134,7 @@ async fn main() -> Result<()> {
                     .as_str()
                     .context("missing credential")?
                     .into(),
+                ca_cert: tls.ca_cert().map(PathBuf::from),
             };
             if let Some(parent) = cli.config.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -167,6 +172,8 @@ async fn main() -> Result<()> {
             let config: Config =
                 serde_json::from_slice(&std::fs::read(&cli.config).context("请先 enroll")?)?;
             server_url(&config.server)?;
+            // Fail immediately for missing/invalid CA files rather than retrying forever.
+            let tls = tls::AgentTls::new(cli.ca_cert.as_deref().or(config.ca_cert.as_deref()))?;
             let lock = std::fs::OpenOptions::new()
                 .create(true)
                 .truncate(false)
@@ -186,7 +193,7 @@ async fn main() -> Result<()> {
             let mut delay = 1;
             loop {
                 manager.reset_connections();
-                let connection = connect(&config, &epoch, &manager, &close_limit);
+                let connection = connect(&config, &tls, &epoch, &manager, &close_limit);
                 tokio::select! {
                     result=connection=>{if let Err(error)=result{tracing::warn!(%error,"连接中断，终端继续运行");}}
                     _=tokio::signal::ctrl_c()=>{tracing::info!("停止 Agent，关闭它创建的终端");break;}
@@ -202,6 +209,7 @@ async fn main() -> Result<()> {
 }
 async fn connect(
     config: &Config,
+    tls: &tls::AgentTls,
     epoch: &str,
     manager: &Arc<TerminalManager>,
     close_limit: &Arc<tokio::sync::Semaphore>,
@@ -227,7 +235,12 @@ async fn connect(
         .max_frame_size(Some(MAX_MESSAGE));
     let (mut ws, response) = tokio::time::timeout(
         Duration::from_secs(15),
-        tokio_tungstenite::connect_async_with_config(request, Some(ws_config), false),
+        tokio_tungstenite::connect_async_tls_with_config(
+            request,
+            Some(ws_config),
+            false,
+            Some(tls.websocket_connector()),
+        ),
     )
     .await??;
     anyhow::ensure!(
@@ -325,4 +338,56 @@ where
         Ok(())
     };
     tokio::time::timeout(Duration::from_secs(TRANSFER_TIMEOUT_SECS), send).await?
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn existing_config_without_ca_remains_compatible() {
+        let config: Config = serde_json::from_str(
+            r#"{"server":"https://example.com","machineId":"id","secret":"test"}"#,
+        )
+        .unwrap();
+        assert!(config.ca_cert.is_none());
+        assert!(serde_json::to_value(config)
+            .unwrap()
+            .get("caCert")
+            .is_none());
+    }
+
+    #[test]
+    fn ca_cert_option_is_global_and_overrides_saved_path() {
+        for args in [
+            vec!["ergent-agent", "--ca-cert", "new.pem", "run"],
+            vec!["ergent-agent", "run", "--ca-cert", "new.pem"],
+            vec![
+                "ergent-agent",
+                "enroll",
+                "--server",
+                "https://example.com",
+                "--ca-cert",
+                "new.pem",
+            ],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert_eq!(
+                cli.ca_cert.as_deref(),
+                Some(std::path::Path::new("new.pem"))
+            );
+        }
+        let config: Config = serde_json::from_str(
+            r#"{"server":"https://example.com","machineId":"id","secret":"test","caCert":"saved.pem"}"#,
+        ).unwrap();
+        let cli = Cli::try_parse_from(["ergent-agent", "run", "--ca-cert", "new.pem"]).unwrap();
+        assert_eq!(
+            cli.ca_cert.as_deref().or(config.ca_cert.as_deref()),
+            Some(std::path::Path::new("new.pem"))
+        );
+        assert_eq!(
+            config.ca_cert.as_deref(),
+            Some(std::path::Path::new("saved.pem"))
+        );
+    }
 }

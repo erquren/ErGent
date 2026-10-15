@@ -1,0 +1,31 @@
+# Explicit local-development HTTP mode. Never expose this port to a LAN/public IP.
+# Browser first-account setup still rejects a non-loopback Docker bridge peer.
+# Use the private stdin admin-create procedure in docs/docker.md.
+# This separate project/volume avoids opening a production database in dev mode.
+name: ergent-dev
+
+services:
+  server:
+    image: "${ERGENT_IMAGE:-ergent-server:local}"
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    ports:
+      - "127.0.0.1:${ERGENT_DEV_PORT:-7777}:7777"
+    volumes:
+      - server-data:/data
+    environment:
+      ERGENT_TLS_MODE: dev-http
+      ERGENT_ORIGIN: "http://127.0.0.1:${ERGENT_DEV_PORT:-7777}"
+    stop_grace_period: 30s
+
+volumes:
+  server-data:

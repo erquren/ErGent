@@ -14,6 +14,7 @@ async fn app(path: &std::path::Path) -> App {
         hub: Arc::new(Mutex::new(crate::Hub::default())),
         login_locks: Arc::new(std::array::from_fn(|_| Mutex::new(()))),
         login_policy: login_guard::Policy::default(),
+        connections: crate::Connections::default(),
     }
 }
 

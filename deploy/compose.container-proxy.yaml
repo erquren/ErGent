@@ -1,0 +1,42 @@
+# Optional standalone alternative for an EXISTING containerized Nginx.
+# Do not merge this file with ../compose.yaml or compose.host-proxy.yaml.
+# From the repository root:
+# docker compose --env-file .env -f deploy/compose.container-proxy.yaml up -d --build
+# No Nginx container is created, and no backend port is published.
+name: ergent
+
+services:
+  server:
+    image: "${ERGENT_IMAGE:-ergent-server:local}"
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    expose:
+      - "7777"
+    volumes:
+      - server-data:/data
+    networks:
+      proxy:
+        aliases:
+          - ergent-server
+    environment:
+      ERGENT_TLS_MODE: proxy
+      ERGENT_ORIGIN: "${ERGENT_ORIGIN:?Set ERGENT_ORIGIN to your exact public HTTPS origin}"
+      ERGENT_TRUSTED_PROXY: "${ERGENT_TRUSTED_PROXY:?Set ERGENT_TRUSTED_PROXY to the Nginx container's exact static IP on the shared network}"
+    stop_grace_period: 30s
+
+volumes:
+  server-data:
+
+networks:
+  proxy:
+    external: true
+    name: "${ERGENT_PROXY_NETWORK:?Set ERGENT_PROXY_NETWORK to an existing Docker network shared with Nginx}"

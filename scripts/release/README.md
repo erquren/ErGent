@@ -36,14 +36,24 @@ Windows 使用 `./ergent-server.exe`。该命令会立即使旧码失效，也�
 
 多个浏览器入口用 `--additional-origin URL` 逐个添加。
 `--allow-any-origin` 是显式的开发选项，发布包默认不开启；Tailscale 的 HTTP 浏览器测试可显式使用此选项。
-公网部署在 HTTPS 反向代理后，并设置 `--origin https://你的域名`，代理需支持 WebSocket。
+公网部署可以使用原生 HTTPS，也可以复用现有 HTTPS 反向代理；后者需支持 WebSocket。原生 HTTPS 示例（替换域名、端口和证书路径）：
+
+```sh
+./start-server.sh --listen 0.0.0.0:7777 --origin https://terminal.example.com:7777 \
+  --tls-mode direct --tls-cert /path/to/fullchain.pem --tls-key /path/to/privkey.pem
+```
+
+原生 TLS 读取现有 PEM 证书链和匹配私钥，不自动申请/续期证书，更新后需要重启 Server。TLS 文件路径不是私钥内容，切勿将私钥内容写入参数、环境变量或日志。证书需匹配 origin 的域名或 IP SAN；origin 必须包含实际非默认端口。
+
+已有反向代理时使用 `--tls-mode proxy --origin https://你的域名`，不传证书参数，并按下文配置精确 `--trusted-proxy`；通过回环监听/防火墙限制明文后端。显式 `--tls-mode dev-http` 仅用于本机开发，不会放宽 Origin、CSRF、登录或初始化保护。上述新选项需使用包含对应功能的构建，旧发布包请以 `--help` 为准。
 
 ### 保留 CLI 自动化创建账户
 
-自动化仍可调用 `ergent-server admin-create --username 用户名`，通过标准输入提供一次密码，关闭输入流后完成。
+也可调用 `ergent-server admin-create --username 用户名`。在普通交互终端中，密码输入隐藏，输入后按 Enter，再输入一次确认并按 Enter，无需 Ctrl-D/Ctrl-Z。两次密码须一致，长度为 12–1024 个 UTF-8 字节。
 首次 CLI 创建同样会关闭网页初始化；后续仍可由服务器操作者使用 CLI 创建独立账户。
-不要将密码放入命令行参数或 shell 历史。CLI 的交互式 stdin 读取仍需要 EOF，且不会隐藏回显或要求二次确认；
-手动首次创建推荐使用上面的网页初始化流程。`scripts/dev.py` 和既有自动化的单次 stdin 调用保持兼容。
+不要将密码放入命令行参数、环境变量、shell 历史或日志。手动首次创建也可以使用上面的网页初始化流程。
+
+非 TTY 的管道自动化保持兼容：通过标准输入提供一次密码，并关闭输入流（EOF）后完成，不要求再次确认；这适用于可信秘密管理器等已有脚本，不需要手工输入 EOF。`scripts/dev.py` 和既有自动化的单次 stdin 调用不变。Docker 中人工操作使用默认 TTY 的 `docker compose exec`；只有非交互管道使用 `exec -T`。
 
 ## 启动 Agent
 
@@ -54,11 +64,14 @@ Windows 使用 `./ergent-server.exe`。该命令会立即使旧码失效，也�
 ./ergent-agent run
 ```
 
-enroll 从标准输入读取令牌；输入并按回车后，Unix 使用 Ctrl-D 结束输入，Windows 使用 Ctrl-Z 后回车。
+在普通交互终端中，enroll 隐藏读取一次令牌，输入后按 Enter 完成，无需 Ctrl-D/Ctrl-Z。不要把令牌放入参数、环境变量、shell 历史或日志。
+非 TTY 管道仍从标准输入读取有界内容，并在输入流关闭（EOF）后完成，供现有自动化使用。
 在同一台机器测试可使用 `--server http://127.0.0.1:7777`。
 当前 Agent 仅允许 loopback HTTP；跨机器连接（包括 Tailscale）使用 HTTPS。
 Agent 配置默认存放 `.local/agent.json`；可在 enroll/run 前使用 `--config 路径` 指定同一文件。
 后台服务安装需自行配置；关闭浏览器不结束终端，Agent 或操作系统重启不能恢复原进程。
+
+私有 CA 场景可用 `./ergent-agent --ca-cert /path/to/root-ca.pem enroll --server https://你的域名 --name My-PC`。该参数仅接收 CA 证书 PEM，不接收私钥；同时用于 HTTPS 和 WSS 校验。注册后配置保存 Agent 机器上的绝对 CA 路径，后续 `run` 自动使用，文件需保留且可读；更新 CA 文件后重启 Agent 才会加载。`--ca-cert 路径 run` 可临时覆盖而不重写配置。通过 IP 连接时证书必须包含匹配的 IP SAN；浏览器也需信任该 CA，不应禁用证书校验。
 
 ## 更新与平台要求
 
