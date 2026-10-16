@@ -59,11 +59,24 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def validate_versions(metadata, web_version, expected_version=None):
+    packages = {p['name']: p['version'] for p in metadata['packages']
+                if p['name'] in ('ergent-server', 'ergent-agent')}
+    if set(packages) != {'ergent-server', 'ergent-agent'} or len(set(packages.values())) != 1:
+        raise ValueError('Server and Agent must both be present and have the same version.')
+    version = packages['ergent-server']
+    if web_version != version:
+        raise ValueError(f'Web version is {web_version}, but Server and Agent version is {version}.')
+    if expected_version and expected_version.removeprefix('v') != version:
+        raise ValueError(f'Expected {expected_version}, but project version is {version}.')
+    return version
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--target', choices=TARGETS, help='Defaults to the native OS/CPU; use Release CI for all six.')
     parser.add_argument('--out-dir', type=Path, default=ROOT / 'release')
-    parser.add_argument('--expect-version', help='Fail if this version/tag differs from Cargo metadata.')
+    parser.add_argument('--expect-version', help='Fail if this version/tag differs from Server, Agent or web versions.')
     parser.add_argument('--list-targets', action='store_true')
     args = parser.parse_args()
     if args.list_targets:
@@ -78,12 +91,11 @@ def main():
     if not cargo or not pnpm:
         parser.error('Install Rust (rust-toolchain.toml), Node.js 22 and pnpm 10.17.1 first.')
     metadata = json.loads(run([cargo, 'metadata', '--no-deps', '--format-version', '1', '--locked'], env, True))
-    versions = {p['version'] for p in metadata['packages'] if p['name'] in ('ergent-server', 'ergent-agent')}
-    if len(versions) != 1:
-        parser.error('Server and Agent must have the same version.')
-    version = versions.pop()
-    if args.expect_version and args.expect_version.removeprefix('v') != version:
-        parser.error(f'Expected {args.expect_version}, but Cargo version is {version}.')
+    web_version = json.loads((ROOT / 'apps/web/package.json').read_text(encoding='utf-8'))['version']
+    try:
+        version = validate_versions(metadata, web_version, args.expect_version)
+    except ValueError as error:
+        parser.error(str(error))
     triple = TARGETS[target]
     # Isolate release builds from running development services and inherited target dirs.
     env['CARGO_TARGET_DIR'] = str(ROOT / 'target/package')

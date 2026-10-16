@@ -213,6 +213,16 @@ Configure background services separately. Closing the browser leaves terminals r
 发布包不含密码、令牌、数据库、AI CLI 或开发环境。
 manifest.json 记录版本、Git commit、工作区是否有未提交修改及文件校验值；外部 .sha256 校验压缩包。
 
+### 升级到 1.2.0 / Upgrade to 1.2.0
+
+从 1.1.0 升级时，首次启动会执行 `0005_first_account_setup.sql`。已有账户继续直接登录，网页首次初始化会永久关闭；空数据库使用一次性初始化码或 `admin-create` 创建首个账户。请备份实际使用的数据库、Agent 配置、部署配置和证书；回退时同时恢复旧程序及升级前同一时点的数据库备份。
+On upgrade from 1.1.0, startup applies `0005_first_account_setup.sql`. Existing accounts log in directly and first-account setup is permanently closed. Empty databases use a setup code or `admin-create`. Back up the actual database, Agent configuration, deployment configuration and certificates; restore the old programs together with the matching pre-upgrade database backup when rolling back.
+
+跨机器部署检查上文的 HTTPS/代理配置；使用私有 CA 时，Agent 注册需指定 `--ca-cert`，保存的证书路径须保持可读。原生包与 Docker 镜像分别发布，容器部署请按仓库中的 `docs/docker.md` 更新。
+Check the HTTPS/proxy configuration above for remote deployments. For a private CA, specify `--ca-cert` at Agent enrollment and keep the saved certificate path readable. Native packages and Docker images are published separately; follow `docs/docker.md` in the repository for container upgrades.
+
+### 平台要求 / Platform requirements
+
 Linux GNU 包以 Ubuntu 22.04 构建（glibc 2.35+），需系统 CA 证书；不支持直接运行于 Alpine/musl。
 macOS 构建最低部署目标为 11.0，尚未完成旧版系统实机验收。
 Windows 使用 MSVC，需支持 ConPTY 的现代 Windows（Windows 10 1809+ / Windows 11），可能需要匹配架构的 Visual C++ Runtime。

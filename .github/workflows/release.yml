@@ -9,7 +9,11 @@ permissions:
   contents: read
 
 jobs:
+  checks:
+    uses: ./.github/workflows/check.yml
+
   package:
+    needs: checks
     name: Package ${{ matrix.target }}
     strategy:
       fail-fast: false

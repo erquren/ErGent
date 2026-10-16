@@ -17,10 +17,16 @@ docs
 # Local upstream reference checkout; not part of Ergent.
 /release/
 
-# Public deployment guide (other local docs remain ignored).
+# Public project guides (other local docs remain ignored).
 !docs/
 docs/*
 !docs/docker.md
+!docs/server.md
+!docs/agent.md
+!docs/cli.md
+!docs/upgrade.md
+!docs/development.md
+!docs/behavior.md
 
 # Private database backup archives.
 /backups/

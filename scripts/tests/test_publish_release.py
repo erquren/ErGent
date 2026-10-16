@@ -448,7 +448,12 @@ class PublishTests(unittest.TestCase):
             target = Path(outside) / 'SHA256SUMS'
             target.write_bytes(data)
             path.unlink()
-            path.symlink_to(target)
+            try:
+                path.symlink_to(target)
+            except OSError as error:
+                if getattr(error, 'winerror', None) == 1314:
+                    self.skipTest('Creating symlinks requires Windows privileges or Developer Mode')
+                raise
             self.assert_rejected_without_upload(FakeGitHub(self.files))
 
     def test_invalid_tag_and_commit_are_rejected(self):
