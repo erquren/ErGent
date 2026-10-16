@@ -7,7 +7,7 @@ One container runs Server and the built web UI. Agents remain native on developm
 
 ## 先选部署入口 / Choose the right guide
 
-- 下载的是解压即用的原生包？使用[原生发布包说明](../scripts/release/README.md#启动-server)：推荐 `./start-server.sh`；直接运行二进制必须加 `--web "$PWD/web"`。原生包也支持同机 Nginx、原生 TLS 和本机/SSH 测试，不需要 Docker。
+- 下载的是解压即用的原生包？使用[服务端启动说明](server.md)：推荐 `./start-server.sh`；直接运行二进制必须加 `--web "$PWD/web"`。原生包也支持同机 Nginx、原生 TLS 和本机/SSH 测试，不需要 Docker。
   For an extracted native archive, use the package guide and launch script. Docker is optional; native direct launches need the explicit bundled web path.
 - 本文容器数据库是 `/data/server.db`，位于持久化卷；原生包默认是包目录的 `.local/server.db`。若以前显式使用 `data/server.db` 或其他路径，继续指向那份实际数据；切换部署方式不会自动迁移数据库。
   Docker uses `/data/server.db`; native packages default to `.local/server.db`. Preserve any explicitly chosen database path. Switching deployment methods does not migrate data automatically.
@@ -22,7 +22,7 @@ One container runs Server and the built web UI. Agents remain native on developm
 
 - Docker Engine、Docker Compose v2，以及指向服务器的域名和对应的现有 TLS 证书/私钥。以下文件权限示例面向 Linux；rootless Docker、用户命名空间和 SELinux 环境需按实际映射/标签规则调整。
 - **不会自动申请或续期证书，不包含 ACME 客户端。** 证书由现有的证书管理流程提供；自签名/私有 CA 证书需要浏览器和原生 Agent 信任对应 CA。
-- 当前首先支持从源码构建本地镜像 `ergent-server:local`。在实际发布成功前，不能假定 GHCR/Docker Hub 已有可拉取镜像。下文的拉取示例仅适用于维护者确认发布成功后。
+- 当前可从源码构建本地镜像 `ergent-server:local`，镜像发布工作流的目标为 Docker Hub 的 `erquren/ergent`。在实际发布成功前，不能假定目标标签已有可拉取镜像。下文的拉取示例仅适用于维护者确认发布成功后。
 - 源码构建需要联网下载基础镜像和锁定依赖，宿主机无需安装 Rust、Node.js 或 pnpm，实际工具链版本见 `Dockerfile`。
 - 只运行一个 Server。Agent/WebSocket 路由和重放缓存保存在单进程内存中；不要扩容副本，也不要让两个 Server 同时访问同一数据库。`setup-code` 等短期管理命令不属于第二个 Server。
 
@@ -91,7 +91,7 @@ curl --fail https://terminal.example.com/health/ready
 以下值仍是**占位符**，不是已验证存在的镜像。维护者完成发布并确认拉取权限后，把 `.env` 的 `ERGENT_IMAGE` 设置为对应镜像，推荐使用发布结果中的不可变摘要：
 
 ```dotenv
-ERGENT_IMAGE=ghcr.io/erquren/ergent-server@sha256:REPLACE_WITH_PUBLISHED_DIGEST
+ERGENT_IMAGE=docker.io/erquren/ergent@sha256:REPLACE_WITH_PUBLISHED_DIGEST
 ```
 
 然后保持证书、环境变量和数据卷配置不变，执行：
@@ -101,7 +101,7 @@ docker compose pull server
 docker compose up -d --no-build server
 ```
 
-也可使用维护者确认存在的完整提交标签 `sha-<完整提交SHA>`，并记录实际摘要。在发布结果尚未确认前，使用上面的本地构建路径；不要把拉取失败误判为用户配置问题。
+也可使用维护者确认存在的 `erquren/ergent:1.2.0` 或完整提交标签 `erquren/ergent:sha-<完整提交SHA>`，并记录实际摘要。在发布结果尚未确认前，使用上面的本地构建路径；不要把拉取失败误判为用户配置问题。
 
 ## 3. 领取初始化码并创建账户
 
@@ -126,7 +126,7 @@ docker compose exec server /app/ergent-server --database /data/server.db setup-c
 ./ergent-agent run
 ```
 
-网页登录后取得注册令牌；交互终端会隐藏输入，粘贴一次令牌后按 Enter 完成，无需 Ctrl-D/Ctrl-Z。不把令牌写入命令行或日志。Agent 配置、开发文件与 AI CLI 登录信息留在开发机器上。跨机器 Agent 连接必须使用 HTTPS，包括 Tailscale；非默认 HTTPS 端口需写入地址。详见[原生 Agent 使用说明](../scripts/release/README.md#启动-agent)。
+网页登录后取得注册令牌；交互终端会隐藏输入，粘贴一次令牌后按 Enter 完成，无需 Ctrl-D/Ctrl-Z。不把令牌写入命令行或日志。Agent 配置、开发文件与 AI CLI 登录信息留在开发机器上。跨机器 Agent 连接必须使用 HTTPS，包括 Tailscale；非默认 HTTPS 端口需写入地址。详见[客户端启动说明](agent.md)。
 
 如果 Server 来自尚未发布的源码提交，应使用同一兼容版本源码构建的原生 Agent，不能假定旧发布包一定兼容。Server、网页和 Agent 的协议必须匹配。
 
@@ -363,9 +363,28 @@ docker compose -f deploy/compose.dev-http.yaml \
 
 `Docker image (manual)` workflow 仅手动触发，`publish` 默认 `false`，只构建不上传。开启 `publish: true` 前需得到项目维护者的明确发布授权；同一源码提交的 Docker validation 通过后才可发布 `linux/amd64` 和 `linux/arm64` 镜像。
 
-原仓库目标为 `ghcr.io/erquren/ergent-server:sha-<完整提交SHA>`，fork 使用自身仓库路径。不自动创建 `latest` 或版本标签，不修改现有 GitHub Release/附件，也没有 tag/release 自动触发入口。发布成功后核实镜像摘要、架构与拉取权限，再向用户提供实际可用的镜像地址。
+目标仓库固定为 [Docker Hub 的 erquren/ergent](https://hub.docker.com/r/erquren/ergent)。在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 配置 `DOCKERHUB_USERNAME`（Variable 或 Secret 均支持，Variable 优先）和 `DOCKERHUB_TOKEN`（Secret，使用对该仓库有写入权限的 Docker Hub 访问令牌）。fork 若需发布到其他镜像仓库，须先修改 workflow 中的镜像地址。
 
-发布 1.2.0 时，先选择与原生包 `v1.2.0` 标签相同的源码提交，再手动运行此 workflow；仅推送版本标签或公开 GitHub Release 不会发布镜像。需要上传时显式设置 `publish: true`，双架构验证通过后才会上传 `sha-<完整提交SHA>` 镜像。部署时记录实际镜像摘要，不使用尚未创建的 `:1.2.0` 或 `:latest` 地址。
+每次上传生成 `docker.io/erquren/ergent:sha-<完整提交SHA>`。在版本标签上运行时，会先检查 Rust、网页及 Git 标签版本一致性；例如 `v1.2.0` 会另外生成 `docker.io/erquren/ergent:1.2.0`。分支运行只生成 SHA 标签，不自动创建 `latest`，不修改 GitHub Release/附件，也没有 tag/release 自动触发入口。
+
+发布 1.2.0 的步骤：
+
+1. 提交并推送包含此 workflow 的修改，确保它已进入默认分支，并让 `v1.2.0` 标签指向包含此修改的发布提交；已有标签先核对其指向及 workflow 内容。
+2. 使用已登录 GitHub 的 CLI，在目标版本标签上手动运行：
+
+   ```sh
+   gh workflow run docker-image.yml --ref v1.2.0 -f publish=true
+   ```
+
+3. 查看 GitHub Actions 中的 `Docker image (manual)`。双架构 `Docker validation` 全部通过后才会登录 Docker Hub，构建并上传 `linux/amd64` 和 `linux/arm64`。运行摘要会列出镜像标签和摘要。
+4. 发布成功后验证镜像索引并拉取：
+
+   ```sh
+   docker buildx imagetools inspect erquren/ergent:1.2.0
+   docker pull erquren/ergent:1.2.0
+   ```
+
+镜像索引应包含 `linux/amd64` 和 `linux/arm64`；Docker 会按运行机器的架构选择镜像。部署时可设置 `ERGENT_IMAGE=erquren/ergent:1.2.0`，推荐记录并使用运行摘要中实际发布的 digest。仅推送版本标签或公开 GitHub Release 不会上传 Docker 镜像。
 
 ## 常见问题
 
@@ -374,5 +393,5 @@ docker compose -f deploy/compose.dev-http.yaml \
 - **数据库写入/chmod 失败**：检查 `/data` 可写，目录及已有文件均为 UID/GID 10001 所有，并核实 bind mount/SELinux；不要删除数据库来“修复”。
 - **初始化码缺失**：使用真正交互终端中的 `docker compose exec`，不加 `-T`；普通日志不会包含码，且首次初始化完成后不再提供。
 - **`ORIGIN_REJECTED`**：使用与环境变量完全一致的 HTTPS origin，不从明文 bridge 后端进行首次设置，不关闭 origin 校验。
-- **所有用户共享登录限流**：代理模式核实精确 TCP 对端和 `X-Real-IP` 覆盖；直接模式核实 Docker 网络是否保留源 IP。重启不会清除数据库中的未过期限制，需要时使用[带审计的 CLI 解锁](../scripts/release/README.md#登录保护与审计)。
+- **所有用户共享登录限流**：代理模式核实精确 TCP 对端和 `X-Real-IP` 覆盖；直接模式核实 Docker 网络是否保留源 IP。重启不会清除数据库中的未过期限制，需要时使用[带审计的 CLI 解锁](cli.md#登录保护与审计)。
 - **网页能打开但终端断连**：检查 HTTPS 证书信任、协议版本；使用代理时再检查 WebSocket 和超时配置。
