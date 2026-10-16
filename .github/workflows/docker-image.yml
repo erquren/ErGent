@@ -21,6 +21,7 @@ jobs:
     needs: validate
     if: ${{ inputs.publish }}
     runs-on: ubuntu-24.04
+    environment: dockerhub
     permissions:
       contents: read
     steps:
