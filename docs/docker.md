@@ -365,6 +365,8 @@ docker compose -f deploy/compose.dev-http.yaml \
 
 原仓库目标为 `ghcr.io/erquren/ergent-server:sha-<完整提交SHA>`，fork 使用自身仓库路径。不自动创建 `latest` 或版本标签，不修改现有 GitHub Release/附件，也没有 tag/release 自动触发入口。发布成功后核实镜像摘要、架构与拉取权限，再向用户提供实际可用的镜像地址。
 
+发布 1.2.0 时，先选择与原生包 `v1.2.0` 标签相同的源码提交，再手动运行此 workflow；仅推送版本标签或公开 GitHub Release 不会发布镜像。需要上传时显式设置 `publish: true`，双架构验证通过后才会上传 `sha-<完整提交SHA>` 镜像。部署时记录实际镜像摘要，不使用尚未创建的 `:1.2.0` 或 `:latest` 地址。
+
 ## 常见问题
 
 - **TLS 文件无法读取**：确认挂载路径存在，目录可遍历，文件为可读的独立副本，所有者为映射后的 UID/GID 10001。不要放宽原证书库权限，不要把私钥内容写进环境变量。

@@ -4,7 +4,7 @@
 
 # Ergent
 
-**版本：v1.1.0**
+**版本：v1.2.0**
 
 浏览器里的个人开发工作台：Agent 主动连接 Server，在网页中按设备管理真实 Shell 终端。
 A personal development workspace in your browser: Agents connect to Server and expose real shell terminals by device.
@@ -89,7 +89,13 @@ python3 scripts/dev.py
 
 历史会话元数据长期保留；已退出终端释放 PTY 和解析器资源，不占用 20 个并发终端名额。Hello 与会话列表按 64KB 消息上限分块同步，完整接收后才替换列表。此版本使用 `ergent.preview.v3`，Server、Agent 和网页需一起升级；旧协议明确拒绝连接，不截断历史列表。详见 [历史保留与同步协议](INVENTORY_PROTOCOL.md)。
 
-### 升级到 1.1.0
+### 升级到 1.2.0
+
+先保存终端中的工作，停止 Server/Agent，备份实际使用的数据库、Agent 配置和部署配置，再一起替换 Server、Agent、网页和启动脚本。停止 Agent 会结束其终端进程；不要让新旧 Server 同时访问同一数据库。首次启动会执行 `0005_first_account_setup.sql`，已有账户继续直接登录，网页首次初始化会永久关闭；空数据库通过一次性初始化码或 `admin-create` 创建首个账户。回退时使用旧程序和升级前同一时点的数据库备份。
+
+本版新增原生 HTTPS、Agent 私有 CA 支持及 Docker Server 部署。跨机器连接使用 HTTPS；反向代理部署选择 `--tls-mode proxy`，直接提供 HTTPS 时选择 `--tls-mode direct` 并配置证书和私钥；私有 CA 在 Agent 注册时通过 `--ca-cert` 指定。本机明文测试使用 `--tls-mode dev-http`。启动、初始化和证书配置见[发布包使用说明](scripts/release/README.md)，容器部署见 [Docker 部署指南](docs/docker.md)。
+
+### 升级到 1.1.0（历史说明）
 
 请先保存终端中的工作，停止所有 Server/Agent，并备份 `.local/`（使用自定义数据库或配置路径时也需备份对应文件）。Server、Agent 和网页须一起升级到使用 `ergent.preview.v3` 的版本；不要让新旧 Server 同时访问同一数据库。首次升级会将旧登录失败计数（包括永久封禁）清零并记录 `legacy_reset` 审计；回退旧版本需恢复升级前备份。详见[更新与平台要求](scripts/release/README.md#更新与平台要求)和[登录保护与审计](scripts/release/README.md#登录保护与审计)。
 
@@ -103,10 +109,17 @@ sh scripts/cargo.sh run -p ergent-protocol --example export --locked
 sh scripts/pnpm.sh build
 sh scripts/pnpm.sh exec playwright install chromium
 sh scripts/pnpm.sh test:e2e
-python3 scripts/package.py --expect-version v1.1.0
+python3 scripts/package.py --expect-version v1.2.0
 ```
 
-本机打包当前平台。推送与项目版本一致的 `v*` 标签后，GitHub Actions 构建并校验全部六个平台。Release 不存在时创建含校验和的草稿；已存在时只补传缺失附件，同名附件须校验一致，不覆盖已有文件。
+本机打包当前平台，打包前会检查 Server、Agent、网页及指定标签的版本一致性。
+
+### CI/CD 与发布
+
+- 分支推送和 Pull Request 运行 `Check`，包含发布工具测试、Rust 格式/Clippy/测试、协议导出一致性及网页构建/E2E；Pull Request 另外运行六平台 `Package validation` 和双架构 `Docker validation`。
+- 原生包发布使用小写 `v1.2.0` 标签，并确保标签指向包含上述版本和文档修改的提交；大写 `V1.2.0` 不会触发 Release。`Release` 先调用同一套 `Check`，全部通过后才构建、校验并汇总六个平台的包及 `SHA256SUMS`。
+- Release 不存在时创建含校验和的草稿，维护者检查附件和发布说明后手动公开；已存在时只补传缺失附件，同名附件须校验一致，不覆盖已有文件。在分支上手动运行 `Release` 只生成 Actions 构建产物；在版本标签上手动运行也会执行 Release 附件上传。
+- Docker 镜像通过独立的 `Docker image (manual)` 手动发布，默认只验证不上传；推送 `v1.2.0` 标签或公开原生包 Release 均不会自动发布镜像。镜像仅使用 `sha-<完整提交SHA>` 标签，不生成 `1.2.0` 或 `latest` 标签，具体见 [Docker 发布说明](docs/docker.md#可选手动镜像发布维护者)。
 
 ### 名称规则
 
