@@ -21,9 +21,6 @@ fn exit_naturally(manager: &TerminalManager, id: &str) {
     let session = manager.get(id).unwrap();
     let resources = session.resources.lock().clone().unwrap();
     let mut writer = resources.writer.lock();
-    // Headless ConPTY tests have no xterm to answer its inherited-cursor query.
-    #[cfg(windows)]
-    writer.write_all(b"\x1b[1;1R").unwrap();
     writer.write_all(b"exit\r").unwrap();
     drop(writer);
     drop(resources);

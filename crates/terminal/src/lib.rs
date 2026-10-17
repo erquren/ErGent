@@ -3,6 +3,8 @@ mod screen;
 mod tool_status;
 #[cfg(windows)]
 mod windows_process;
+#[cfg(any(windows, test))]
+mod windows_startup;
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ergent_protocol::{
@@ -333,6 +335,8 @@ impl TerminalManager {
         });
         sessions.insert(id.into(), session.clone());
         let read_state = state.clone();
+        #[cfg(windows)]
+        let startup_writer = Arc::downgrade(&session.resources.lock().as_ref().unwrap().writer);
         #[cfg(unix)]
         let exited_at = Arc::new(Mutex::new(None::<Instant>));
         #[cfg(unix)]
@@ -340,6 +344,8 @@ impl TerminalManager {
         let (reader_done, reader_finished) = std::sync::mpsc::sync_channel(1);
         std::thread::spawn(move || {
             let mut buffer = [0u8; 8192];
+            #[cfg(windows)]
+            let mut cursor_handshake = windows_startup::CursorHandshake::default();
             let complete = loop {
                 #[cfg(unix)]
                 {
@@ -373,6 +379,25 @@ impl TerminalManager {
                 match reader.read(&mut buffer) {
                     Ok(0) => break true,
                     Ok(n) => {
+                        let bytes = &buffer[..n];
+                        #[cfg(windows)]
+                        let startup_output;
+                        #[cfg(windows)]
+                        let bytes = if !cursor_handshake.is_complete() {
+                            // Answer before locking state, independently of viewers
+                            // and input leases. Keep no PTY resources alive on exit.
+                            let Some(writer) = startup_writer.upgrade() else {
+                                break false;
+                            };
+                            startup_output =
+                                match cursor_handshake.process(bytes, &mut **writer.lock()) {
+                                    Ok(output) => output,
+                                    Err(_) => break false,
+                                };
+                            startup_output.as_slice()
+                        } else {
+                            bytes
+                        };
                         let mut s = read_state.lock();
                         let State {
                             parser, recovery, ..
@@ -380,7 +405,7 @@ impl TerminalManager {
                         let Some(parser) = parser.as_mut() else {
                             break false;
                         };
-                        recovery.process(parser, &buffer[..n]);
+                        recovery.process(parser, bytes);
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                     #[cfg(unix)]
@@ -1364,7 +1389,6 @@ mod tests {
         assert!(session.state.lock().lease.is_none());
     }
 
-    #[cfg(unix)]
     #[test]
     fn actual_pty_survives_detach_and_create_is_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1378,6 +1402,34 @@ mod tests {
         manager.create("s", cfg.clone()).unwrap();
         manager.create("s", cfg).unwrap();
         assert_eq!(manager.list().len(), 1);
+        // A Windows shell must start without a browser or an input lease to
+        // answer ConPTY's inherited-cursor query.
+        #[cfg(windows)]
+        {
+            let session = manager.get("s").unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while session
+                .state
+                .lock()
+                .parser
+                .as_ref()
+                .unwrap()
+                .screen()
+                .contents()
+                .is_empty()
+            {
+                assert!(Instant::now() < deadline, "ConPTY shell did not start");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(!session
+                .state
+                .lock()
+                .recovery
+                .read(0)
+                .unwrap()
+                .windows(4)
+                .any(|bytes| bytes == b"\x1b[6n"));
+        }
         manager
             .handle(
                 "v",
@@ -1407,11 +1459,26 @@ mod tests {
             .unwrap();
         let session = manager.get("s").unwrap();
         let lease = session.state.lock().lease.as_ref().unwrap().id.clone();
+        manager
+            .handle(
+                "v",
+                BrowserCommand::Resize {
+                    session_id: "s".into(),
+                    lease_id: lease.clone(),
+                    cols: 100,
+                    rows: 30,
+                },
+            )
+            .unwrap();
+        #[cfg(unix)]
+        let command = b"printf 'ERGENT_%s\\n' 'READY'\r".as_slice();
+        #[cfg(windows)]
+        let command = b"echo ERGENT_^READY\r".as_slice();
         let input = |lease_id: String| BrowserCommand::Input {
             session_id: "s".into(),
             lease_id,
             input_id: Uuid::new_v4().to_string(),
-            data_base64: STANDARD.encode(b"printf 'ERGENT_%s\\n' 'READY'\r"),
+            data_base64: STANDARD.encode(command),
         };
         assert!(manager.handle("intruder", input(lease.clone())).is_err());
         manager.handle("v", input(lease)).unwrap();
