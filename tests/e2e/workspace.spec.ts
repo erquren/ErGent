@@ -522,13 +522,31 @@ test("mobile layout, terminal shortcuts and compact viewport", async ({
     ).toHaveAttribute("aria-pressed", "false");
     await page.getByRole("button", { name: "方向↑", exact: true }).tap();
     await expect.poll(() => inputs).toEqual(["\x03", "\x0c", "\x1b[A"]);
+    await expect(page.locator(".primary-keys button")).toHaveText([
+      "Ctrl",
+      "Ctrl+C",
+      "Esc",
+      "Tab",
+      "↑",
+      "",
+    ]);
+    await expect(
+      page.getByRole("button", { name: "Ctrl+D", exact: true }),
+    ).toBeHidden();
+    await page.getByRole("button", { name: "更多快捷键", exact: true }).tap();
     await page.getByRole("button", { name: "键盘", exact: true }).tap();
     await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
     await page.keyboard.type("garbage");
     await page.getByRole("button", { name: "Ctrl+U", exact: true }).tap();
-    await page.keyboard.type("printf MOBILE_OK");
+    // cmd uses Escape to clear a line; Ctrl+U is a Unix shell binding.
+    if (process.platform === "win32") await page.keyboard.press("Escape");
+    await page.keyboard.type(
+      process.platform === "win32" ? "echo MOBILE_^OK" : "printf MOBILE_OK",
+    );
     await page.getByRole("button", { name: "Enter", exact: true }).tap();
     await expect(page.locator(".xterm-rows")).toContainText("MOBILE_OK");
+    await page.getByRole("button", { name: "收起快捷键", exact: true }).tap();
+    await expect(page.locator(".extra-keys")).toBeHidden();
     for (const viewport of [
       { width: 390, height: 400 },
       { width: 844, height: 390 },
@@ -545,11 +563,26 @@ test("mobile layout, terminal shortcuts and compact viewport", async ({
       const canvas = await page.locator(".terminal-canvas").boundingBox();
       expect(canvas!.width).toBeGreaterThan(250);
       expect(canvas!.height).toBeGreaterThan(50);
+      expect(canvas!.y).toBeLessThan(110);
+      await expect(page.locator(".mobile-workspace-title")).toHaveText(
+        "Mobile terminal",
+      );
       const keys = await page.locator(".terminal-keys").boundingBox();
+      expect(keys!.height).toBeLessThan(65);
       expect(keys!.y + keys!.height).toBeLessThanOrEqual(viewport.height);
       await expect(page.locator(".sidebar")).toBeHidden();
     }
     await page.screenshot({ path: "test-results/mobile-terminal.png" });
+    await page.setViewportSize({ width: 1440, height: 960 });
+    await expect(page.locator(".desktop-workspace-title")).toBeVisible();
+    await expect(page.locator(".mobile-workspace-title")).toBeHidden();
+    await expect(page.locator(".page-heading h1")).toContainText(
+      "Mobile terminal",
+    );
+    await expect(page.locator(".page-heading h1")).toBeVisible();
+    await expect(page.locator(".page-heading p")).toBeVisible();
+    await expect(page.locator(".terminal-toolbar")).toBeVisible();
+    await page.screenshot({ path: "test-results/mobile-terminal-desktop.png" });
   } finally {
     await context.close();
     await api.post(`/api/v1/sessions/${sessionId}/close`, {

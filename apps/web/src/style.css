@@ -1108,6 +1108,7 @@ p {
 }
 
 .mobile-nav-toggle,
+.mobile-workspace-title,
 .nav-backdrop,
 .terminal-keys {
   display: none;
@@ -1128,6 +1129,16 @@ p {
     overscroll-behavior-x: contain;
     scrollbar-width: thin;
     padding: 2px;
+  }
+  .primary-keys {
+    gap: 3px;
+    padding-inline: 0;
+    overflow: visible;
+  }
+  .terminal-keys .primary-keys button {
+    flex: 1;
+    padding-inline: 4px;
+    font-size: 11px;
   }
   .terminal-keys button {
     flex: 0 0 auto;
@@ -1163,6 +1174,9 @@ p {
   .xterm .xterm-helper-textarea {
     font-size: 16px !important;
   }
+}
+.terminal-heading {
+  display: contents;
 }
 @media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
   .app {
