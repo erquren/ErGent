@@ -1,5 +1,7 @@
 // Canonical UI copy → English. Product names and terminal output are never translated.
 export const english: Record<string, string> = {
+  更多快捷键: "More shortcuts",
+  收起快捷键: "Collapse shortcuts",
   状态未知: "Status unknown",
   "终端状态未知 · 无法确认进程退出或最后输出":
     "Terminal status unknown · Process exit and final output could not be confirmed",

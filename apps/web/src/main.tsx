@@ -620,7 +620,17 @@ function App() {
           <div>
             <span className="muted">{t("Workspace")}</span>
             <span className="slash">/</span>
-            <strong>{machine?.name || t("Overview")}</strong>
+            <strong className="desktop-workspace-title">
+              {machine?.name || t("Overview")}
+            </strong>
+            <strong
+              className="mobile-workspace-title"
+              title={machine?.name}
+              role={active ? "heading" : undefined}
+              aria-level={active ? 1 : undefined}
+            >
+              {active?.title || machine?.name || t("Overview")}
+            </strong>
           </div>
           <div className="header-controls">
             {languagePicker}
@@ -643,198 +653,206 @@ function App() {
         )}
         {active ? (
           <div className="terminal-page">
-            <div className="page-heading">
-              <div>
-                <div className="eyebrow">{t("REMOTE TERMINAL")}</div>
-                <h1>
-                  <span className="terminal-title" title={active.title}>
-                    {active.title}
-                  </span>
-                  <span className="badge">
-                    {active.lifecycle === "exited"
-                      ? t("已退出")
-                      : active.lifecycle === "lost"
-                        ? t("状态未知")
-                        : active.lifecycle === "terminating"
-                          ? t("正在结束")
-                          : !machine?.online
-                            ? t("OFFLINE")
-                            : t("运行中")}
-                  </span>
-                </h1>
-                <p>
-                  <Folder size={14} />
-                  {active.cwd}
-                </p>
-              </div>
-              <div className="page-actions">
-                {active.lifecycle !== "running" &&
-                  active.lifecycle !== "terminating" && (
-                    <button onClick={() => setSelected(null)}>
-                      {t("关闭已结束的终端视图")}
-                    </button>
-                  )}
-                <button
-                  aria-label={t("重命名终端")}
-                  onClick={() => {
-                    setEditingSession(active.id);
-                    setTerminalName(active.title);
-                    setError("");
-                    setModal("terminal-rename");
-                  }}
-                >
-                  <Pencil size={15} />
-                </button>
-                {confirmClose ? (
-                  <>
-                    <span>{t("结束该终端及其任务？")}</span>
-                    <button className="danger" onClick={close} disabled={busy}>
-                      {t("确认结束")}
-                    </button>
-                    <button onClick={() => setConfirmClose(false)}>
-                      {t("取消")}
-                    </button>
-                  </>
-                ) : (
+            <div className="terminal-heading">
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow">{t("REMOTE TERMINAL")}</div>
+                  <h1>
+                    <span className="terminal-title" title={active.title}>
+                      {active.title}
+                    </span>
+                    <span className="badge">
+                      {active.lifecycle === "exited"
+                        ? t("已退出")
+                        : active.lifecycle === "lost"
+                          ? t("状态未知")
+                          : active.lifecycle === "terminating"
+                            ? t("正在结束")
+                            : !machine?.online
+                              ? t("OFFLINE")
+                              : t("运行中")}
+                    </span>
+                  </h1>
+                  <p>
+                    <Folder size={14} />
+                    {active.cwd}
+                  </p>
+                </div>
+                <div className="page-actions">
+                  {active.lifecycle !== "running" &&
+                    active.lifecycle !== "terminating" && (
+                      <button onClick={() => setSelected(null)}>
+                        {t("关闭已结束的终端视图")}
+                      </button>
+                    )}
                   <button
-                    disabled={
-                      active.lifecycle !== "running" || !machine?.online
-                    }
-                    aria-label={t("结束终端")}
-                    title={t("结束终端")}
-                    onClick={() => setConfirmClose(true)}
+                    aria-label={t("重命名终端")}
+                    onClick={() => {
+                      setEditingSession(active.id);
+                      setTerminalName(active.title);
+                      setError("");
+                      setModal("terminal-rename");
+                    }}
                   >
-                    <X size={14} />
+                    <Pencil size={15} />
                   </button>
-                )}
-              </div>
-            </div>
-            <div className="tool-summary">
-              <span
-                className={
-                  active.toolStatus
-                    ? `tool-state state-${active.toolStatus.state}`
-                    : "muted"
-                }
-              >
-                {active.toolStatus
-                  ? `${machine?.online ? "" : t("离线 · 上次状态：")}${toolLabel(active.toolStatus)}`
-                  : t("等待任务")}
-              </span>
-              <div className="terminal-utilities">
-                <GlassPopover
-                  label={t("Codex 状态接入说明")}
-                  className="help-control"
-                  icon={<Info size={17} />}
-                >
-                  {() => (
-                    <div className="tool-help-content">
-                      <div className="popover-heading">
-                        {t("让任务状态与你同步")}
-                      </div>
-                      <p>{t("在新终端中执行一次：")}</p>
-                      <code>
-                        {machine?.os === "windows"
-                          ? '\"%ERGENT_AGENT_BIN%\" setup-codex'
-                          : '\"$ERGENT_AGENT_BIN\" setup-codex'}
-                      </code>
-                      <p>
-                        {t(
-                          "通过以下命令启动 Codex，并在 /hooks 中信任新增 hooks：",
-                        )}
-                      </p>
-                      <code>
-                        {machine?.os === "windows"
-                          ? '\"%ERGENT_AGENT_BIN%\" codex'
-                          : '\"$ERGENT_AGENT_BIN\" codex'}
-                      </code>
-                      <p className="privacy-note">
-                        {t(
-                          "只同步状态，不上传提示词或回答。Windows 命令适用于 cmd。",
-                        )}
-                      </p>
-                    </div>
-                  )}
-                </GlassPopover>
-                <GlassPopover
-                  label={t("终端配色")}
-                  className="palette-control"
-                  value={active.terminalTheme || "auto"}
-                  icon={
+                  {confirmClose ? (
                     <>
-                      <Palette size={17} />
-                      <span className="palette-current">
-                        {t(
-                          terminalThemes.find(
-                            ([v]) => v === (active.terminalTheme || "auto"),
-                          )?.[1] || "跟随网页",
-                        )}
-                      </span>
+                      <span>{t("结束该终端及其任务？")}</span>
+                      <button
+                        className="danger"
+                        onClick={close}
+                        disabled={busy}
+                      >
+                        {t("确认结束")}
+                      </button>
+                      <button onClick={() => setConfirmClose(false)}>
+                        {t("取消")}
+                      </button>
                     </>
+                  ) : (
+                    <button
+                      disabled={
+                        active.lifecycle !== "running" || !machine?.online
+                      }
+                      aria-label={t("结束终端")}
+                      title={t("结束终端")}
+                      onClick={() => setConfirmClose(true)}
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="tool-summary">
+                <span
+                  className={
+                    active.toolStatus
+                      ? `tool-state state-${active.toolStatus.state}`
+                      : "muted"
                   }
                 >
-                  {(close) => (
-                    <>
-                      <div className="popover-heading">{t("终端配色")}</div>
-                      <p className="popover-description">
-                        {t("为这个终端选择一种氛围。")}
-                      </p>
-                      <div className="palette-grid">
-                        {terminalThemes.map(([value, label]) => {
-                          const colors = terminalTheme(value, resolved);
-                          return (
-                            <button
-                              key={value}
-                              disabled={busy}
-                              className="palette-option"
-                              aria-label={t(label)}
-                              aria-pressed={
-                                (active.terminalTheme || "auto") === value
-                              }
-                              onClick={() => {
-                                void changeTerminalTheme(value);
-                                close();
-                              }}
-                            >
-                              <span
-                                className="palette-preview"
-                                style={{
-                                  background: colors.background,
-                                  color: colors.foreground,
+                  {active.toolStatus
+                    ? `${machine?.online ? "" : t("离线 · 上次状态：")}${toolLabel(active.toolStatus)}`
+                    : t("等待任务")}
+                </span>
+                <div className="terminal-utilities">
+                  <GlassPopover
+                    label={t("Codex 状态接入说明")}
+                    className="help-control"
+                    icon={<Info size={17} />}
+                  >
+                    {() => (
+                      <div className="tool-help-content">
+                        <div className="popover-heading">
+                          {t("让任务状态与你同步")}
+                        </div>
+                        <p>{t("在新终端中执行一次：")}</p>
+                        <code>
+                          {machine?.os === "windows"
+                            ? '\"%ERGENT_AGENT_BIN%\" setup-codex'
+                            : '\"$ERGENT_AGENT_BIN\" setup-codex'}
+                        </code>
+                        <p>
+                          {t(
+                            "通过以下命令启动 Codex，并在 /hooks 中信任新增 hooks：",
+                          )}
+                        </p>
+                        <code>
+                          {machine?.os === "windows"
+                            ? '\"%ERGENT_AGENT_BIN%\" codex'
+                            : '\"$ERGENT_AGENT_BIN\" codex'}
+                        </code>
+                        <p className="privacy-note">
+                          {t(
+                            "只同步状态，不上传提示词或回答。Windows 命令适用于 cmd。",
+                          )}
+                        </p>
+                      </div>
+                    )}
+                  </GlassPopover>
+                  <GlassPopover
+                    label={t("终端配色")}
+                    className="palette-control"
+                    value={active.terminalTheme || "auto"}
+                    icon={
+                      <>
+                        <Palette size={17} />
+                        <span className="palette-current">
+                          {t(
+                            terminalThemes.find(
+                              ([v]) => v === (active.terminalTheme || "auto"),
+                            )?.[1] || "跟随网页",
+                          )}
+                        </span>
+                      </>
+                    }
+                  >
+                    {(close) => (
+                      <>
+                        <div className="popover-heading">{t("终端配色")}</div>
+                        <p className="popover-description">
+                          {t("为这个终端选择一种氛围。")}
+                        </p>
+                        <div className="palette-grid">
+                          {terminalThemes.map(([value, label]) => {
+                            const colors = terminalTheme(value, resolved);
+                            return (
+                              <button
+                                key={value}
+                                disabled={busy}
+                                className="palette-option"
+                                aria-label={t(label)}
+                                aria-pressed={
+                                  (active.terminalTheme || "auto") === value
+                                }
+                                onClick={() => {
+                                  void changeTerminalTheme(value);
+                                  close();
                                 }}
                               >
-                                <span className="palette-prompt">
-                                  ❯{" "}
-                                  <span style={{ color: colors.blue }}>
-                                    ergent
+                                <span
+                                  className="palette-preview"
+                                  style={{
+                                    background: colors.background,
+                                    color: colors.foreground,
+                                  }}
+                                >
+                                  <span className="palette-prompt">
+                                    ❯{" "}
+                                    <span style={{ color: colors.blue }}>
+                                      ergent
+                                    </span>
+                                    <span className="palette-cursor" />
                                   </span>
-                                  <span className="palette-cursor" />
+                                  <span className="palette-dots">
+                                    {[
+                                      colors.red,
+                                      colors.green,
+                                      colors.yellow,
+                                      colors.blue,
+                                      colors.magenta,
+                                    ].map((color, i) => (
+                                      <i
+                                        key={i}
+                                        style={{ background: color }}
+                                      />
+                                    ))}
+                                  </span>
                                 </span>
-                                <span className="palette-dots">
-                                  {[
-                                    colors.red,
-                                    colors.green,
-                                    colors.yellow,
-                                    colors.blue,
-                                    colors.magenta,
-                                  ].map((color, i) => (
-                                    <i key={i} style={{ background: color }} />
-                                  ))}
+                                <span className="palette-label">
+                                  {t(label)}
+                                  {(active.terminalTheme || "auto") ===
+                                    value && <Check size={13} />}
                                 </span>
-                              </span>
-                              <span className="palette-label">
-                                {t(label)}
-                                {(active.terminalTheme || "auto") === value && (
-                                  <Check size={13} />
-                                )}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </>
-                  )}
-                </GlassPopover>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </GlassPopover>
+                </div>
               </div>
             </div>
             <div

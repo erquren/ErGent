@@ -580,8 +580,8 @@ select:focus-visible {
     background: var(--glass-solid);
   }
   .topbar {
-    height: 54px;
-    min-height: 54px;
+    height: 44px;
+    min-height: 44px;
     border-radius: 0 0 20px 20px;
     padding: 4px 10px;
     box-shadow: 0 3px 15px #29477b08;
@@ -595,25 +595,70 @@ select:focus-visible {
     font-size: 11px;
   }
   .terminal-page {
-    padding: 8px 6px 0;
+    padding: 4px 4px 0;
+  }
+  .desktop-workspace-title,
+  .terminal-heading .page-heading > div:first-child {
+    display: none;
+  }
+  .mobile-workspace-title {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .terminal-heading {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    gap: 4px;
+    margin-bottom: 4px;
+    min-width: 0;
   }
   .page-heading {
-    margin-bottom: 4px;
+    order: 1;
+    margin: 0;
   }
   .page-heading h1 {
     font-size: 16px;
   }
   .page-actions button {
-    width: 34px;
-    height: 34px;
-    min-height: 34px;
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+  .terminal-heading:has(.danger) {
+    flex-wrap: wrap;
+  }
+  .terminal-heading:has(.danger) .page-heading {
+    flex-basis: 100%;
+    justify-content: flex-end;
   }
   .tool-summary {
-    margin-bottom: 7px;
-    min-height: 32px;
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    min-height: 44px;
+    padding: 0 2px;
+    gap: 4px;
   }
   .tool-summary > span {
     font-size: 10px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .terminal-utilities {
+    gap: 2px;
+  }
+  .terminal-utilities .palette-current {
+    display: none;
+  }
+  .terminal-utilities .glass-trigger {
+    width: 44px;
+    min-height: 44px;
+    padding: 0;
   }
   .glass-trigger,
   .tool-summary .glass-trigger {

@@ -1,6 +1,7 @@
 import { t, useLanguage } from "./i18n";
 import { TerminalConnection } from "./terminal-connection";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { ChevronDown, MoreHorizontal } from "lucide-react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import type { SessionInfo } from "../../../packages/protocol-ts";
@@ -27,6 +28,8 @@ export function TerminalView({
   const [dimensions, setDimensions] = useState("");
   const [historyLost, setHistoryLost] = useState(false);
   const [ctrl, setCtrl] = useState(false);
+  const [moreKeys, setMoreKeys] = useState(false);
+  const extraKeysId = useId();
   const ctrlRef = useRef(false);
   const terminal = useRef<Terminal | null>(null);
   const sendInput = useRef<(data: string) => void>(() => {});
@@ -38,6 +41,10 @@ export function TerminalView({
     setControl(false);
     sendInput.current(data);
   };
+  const arrow = (code: string) =>
+    shortcut(
+      `\x1b${terminal.current?.modes.applicationCursorKeysMode ? "O" : "["}${code}`,
+    );
   const claim = useRef<() => void>(() => {});
   const connection = useRef<TerminalConnection | null>(null);
   useEffect(() => {
@@ -141,7 +148,7 @@ export function TerminalView({
         <div className="terminal-host" ref={container} />
       </div>
       <div className="terminal-keys" aria-label={t("终端快捷键")}>
-        <div className="key-row">
+        <div className="key-row primary-keys">
           <button
             disabled={!writable || !running}
             aria-pressed={ctrl}
@@ -152,7 +159,6 @@ export function TerminalView({
           </button>
           {[
             ["Ctrl+C", "\x03"],
-            ["Ctrl+D", "\x04"],
             ["Esc", "\x1b"],
             ["Tab", "\t"],
           ].map(([label, value]) => (
@@ -166,51 +172,82 @@ export function TerminalView({
             </button>
           ))}
           <button
+            aria-label={t("方向{key}", { key: "↑" })}
             disabled={!writable || !running}
-            onClick={() => terminal.current?.focus()}
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={() => arrow("A")}
           >
-            {t("键盘")}
+            ↑
           </button>
-          <button onClick={() => terminal.current?.blur()}>
-            {t("收起键盘")}
+          <button
+            aria-label={t(moreKeys ? "收起快捷键" : "更多快捷键")}
+            title={t(moreKeys ? "收起快捷键" : "更多快捷键")}
+            aria-expanded={moreKeys}
+            aria-controls={extraKeysId}
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={() => {
+              setControl(false);
+              setMoreKeys(!moreKeys);
+            }}
+          >
+            {moreKeys ? (
+              <ChevronDown size={16} />
+            ) : (
+              <MoreHorizontal size={16} />
+            )}
           </button>
         </div>
-        <div className="key-row">
-          {[
-            ["↑", "A"],
-            ["↓", "B"],
-            ["←", "D"],
-            ["→", "C"],
-          ].map(([label, code]) => (
+        <div id={extraKeysId} className="extra-keys" hidden={!moreKeys}>
+          <div className="key-row">
             <button
-              key={label}
-              aria-label={t("方向{key}", { key: label })}
               disabled={!writable || !running}
               onPointerDown={(e) => e.preventDefault()}
-              onClick={() =>
-                shortcut(
-                  `\x1b${terminal.current?.modes.applicationCursorKeysMode ? "O" : "["}${code}`,
-                )
-              }
+              onClick={() => shortcut("\x04")}
             >
-              {label}
+              Ctrl+D
             </button>
-          ))}
-          {[
-            ["Ctrl+A", "\x01"],
-            ["Ctrl+E", "\x05"],
-            ["Ctrl+U", "\x15"],
-            ["Enter", "\r"],
-          ].map(([label, value]) => (
             <button
-              key={label}
               disabled={!writable || !running}
-              onPointerDown={(e) => e.preventDefault()}
-              onClick={() => shortcut(value)}
+              onClick={() => terminal.current?.focus()}
             >
-              {label}
+              {t("键盘")}
             </button>
-          ))}
+            <button onClick={() => terminal.current?.blur()}>
+              {t("收起键盘")}
+            </button>
+          </div>
+          <div className="key-row">
+            {[
+              ["↓", "B"],
+              ["←", "D"],
+              ["→", "C"],
+            ].map(([label, code]) => (
+              <button
+                key={label}
+                aria-label={t("方向{key}", { key: label })}
+                disabled={!writable || !running}
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={() => arrow(code)}
+              >
+                {label}
+              </button>
+            ))}
+            {[
+              ["Ctrl+A", "\x01"],
+              ["Ctrl+E", "\x05"],
+              ["Ctrl+U", "\x15"],
+              ["Enter", "\r"],
+            ].map(([label, value]) => (
+              <button
+                key={label}
+                disabled={!writable || !running}
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={() => shortcut(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
         {ctrl && (
           <div className="ctrl-picker" aria-label={t("选择 Ctrl 组合键")}>
