@@ -340,9 +340,7 @@ test("real browser creates the first account, clears the secrets, and performs a
   await page.getByLabel("确认密码", { exact: true }).fill(password);
   await page.getByLabel("一次性初始化码", { exact: true }).fill(code);
   await page.getByRole("button", { name: "创建账户", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "进入你的工作台" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "登录" })).toBeVisible();
   await expect(page.getByLabel("用户名", { exact: true })).toHaveValue(
     "browser-admin",
   );
@@ -352,10 +350,8 @@ test("real browser creates the first account, clears the secrets, and performs a
   ).toBe(401);
   await required(server, false);
   await page.getByLabel("密码", { exact: true }).fill(password);
-  await page.getByRole("button", { name: "连接工作台", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "所有设备，一个工作台。" }),
-  ).toBeVisible();
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "设备与终端" })).toBeVisible();
   expect(errors).toEqual([]);
   expect((server.output.stdout + server.output.stderr).includes(code)).toBe(
     false,

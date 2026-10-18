@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowRight, ArrowUpRight } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { api, ApiError, csrf } from "./api";
 import { t } from "./i18n";
 import { setupValidationMessage } from "./setup";
@@ -145,28 +145,9 @@ export function AuthScreen({
             alt="ErGent"
           />
         </div>
-        <div>
-          <div className="eyebrow">{t("YOUR MACHINES. ONE WORKSPACE.")}</div>
-          <h1>
-            {t("开发现场，")}
-            <br />
-            {t("随时在场")}
-            <span>{t("。")}</span>
-          </h1>
-          <p>
-            {t("让每一台开发机，都成为浏览器里的工作台。")}
-            <br />
-            {t("真实终端，本机运行，随时继续。")}
-          </p>
-          <div className="platforms">
-            <span>macOS</span>
-            <span>Linux</span>
-            <span>Windows</span>
-          </div>
-        </div>
-        <div className="story-foot">
-          {t("A personal command center for your work.")}
-          <ArrowUpRight size={18} />
+        <div className="login-intro">
+          <h1>{t("远程终端")}</h1>
+          <p>{t("在浏览器中访问你的设备终端。")}</p>
         </div>
       </section>
       <section
@@ -177,7 +158,6 @@ export function AuthScreen({
           {screen === "loading" ? (
             <div role="status" aria-live="polite">
               <h2>{t("正在检查工作台…")}</h2>
-              <p>{t("正在连接服务器，请稍候。")}</p>
             </div>
           ) : screen === "error" ? (
             <>
@@ -194,19 +174,7 @@ export function AuthScreen({
             </>
           ) : (
             <>
-              <span className="eyebrow">
-                {t(screen === "setup" ? "首次使用" : "WELCOME BACK")}
-              </span>
-              <h2>
-                {t(screen === "setup" ? "创建首个账户" : "进入你的工作台")}
-              </h2>
-              <p>
-                {t(
-                  screen === "setup"
-                    ? "此服务器尚未设置账户。完成初始化后即可登录工作台。"
-                    : "使用此服务器上的账户登录。",
-                )}
-              </p>
+              <h2>{t(screen === "setup" ? "创建首个账户" : "登录")}</h2>
               {notice && (
                 <p className="auth-notice" role="status">
                   {t(notice)}
@@ -330,17 +298,13 @@ export function AuthScreen({
                         : "正在登录…"
                       : screen === "setup"
                         ? "创建账户"
-                        : "连接工作台",
+                        : "登录",
                   )}
                   <ArrowRight size={17} />
                 </button>
               </form>
             </>
           )}
-          <div className="login-note">
-            <i className="dot green" />
-            {t("Self-hosted · Your infrastructure")}
-          </div>
         </div>
       </section>
     </main>

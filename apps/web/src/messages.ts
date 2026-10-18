@@ -1,5 +1,12 @@
 // Canonical UI copy → English. Product names and terminal output are never translated.
 export const english: Record<string, string> = {
+  登录: "Sign in",
+  远程终端: "Remote terminals",
+  "在浏览器中访问你的设备终端。":
+    "Access your devices’ terminals in your browser.",
+  暂无设备: "No devices yet",
+  在线设备: "Online devices",
+  运行中的终端: "Running terminals",
   更多快捷键: "More shortcuts",
   收起快捷键: "Collapse shortcuts",
   状态未知: "Status unknown",

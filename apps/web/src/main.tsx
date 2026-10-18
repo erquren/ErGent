@@ -5,7 +5,6 @@ import { createRoot } from "react-dom/client";
 import {
   ArrowUpRight,
   ArrowRight,
-  ChevronDown,
   Folder,
   Laptop,
   LogOut,
@@ -15,7 +14,6 @@ import {
   X,
   Monitor,
   Copy,
-  Radio,
   Pencil,
   Sun,
   Moon,
@@ -55,7 +53,6 @@ function App() {
       {(close) => (
         <>
           <div className="popover-heading">{t("外观")}</div>
-          <p className="popover-description">{t("选择此刻的光线。")}</p>
           {(
             [
               ["system", t("跟随系统"), resolved === "dark" ? Moon : Sun],
@@ -476,14 +473,6 @@ function App() {
             alt="ErGent"
           />
         </div>
-        <div className="workspace-label">
-          <div className="workspace-icon">P</div>
-          <div>
-            <strong>{t("Personal workspace")}</strong>
-            <small>{t("你的开发控制台")}</small>
-          </div>
-          <ChevronDown size={14} />
-        </div>
         <div className="section-heading">
           <span>{t("MACHINES")}</span>
           <button
@@ -568,11 +557,7 @@ function App() {
             </div>
           ))}
           {visible.length === 0 && (
-            <div className="sidebar-empty">
-              {t("还没有接入设备。")}
-              <br />
-              {t("安装 Agent 后即可开始。")}
-            </div>
+            <div className="sidebar-empty">{t("暂无设备")}</div>
           )}
         </nav>
         <button
@@ -582,13 +567,11 @@ function App() {
         >
           <Plus size={17} />
           {t("新建终端")}
-          <span>＋</span>
         </button>
         <div className="sidebar-bottom">
           <span className="avatar">{user[0].toUpperCase()}</span>
           <div>
             <strong>{user}</strong>
-            <small>{t("Personal account")}</small>
           </div>
           <button
             aria-label={t("退出登录")}
@@ -618,8 +601,6 @@ function App() {
             {t("设备 / 终端")}
           </button>
           <div>
-            <span className="muted">{t("Workspace")}</span>
-            <span className="slash">/</span>
             <strong className="desktop-workspace-title">
               {machine?.name || t("Overview")}
             </strong>
@@ -656,7 +637,6 @@ function App() {
             <div className="terminal-heading">
               <div className="page-heading">
                 <div>
-                  <div className="eyebrow">{t("REMOTE TERMINAL")}</div>
                   <h1>
                     <span className="terminal-title" title={active.title}>
                       {active.title}
@@ -734,7 +714,7 @@ function App() {
                 >
                   {active.toolStatus
                     ? `${machine?.online ? "" : t("离线 · 上次状态：")}${toolLabel(active.toolStatus)}`
-                    : t("等待任务")}
+                    : null}
                 </span>
                 <div className="terminal-utilities">
                   <GlassPopover
@@ -745,7 +725,7 @@ function App() {
                     {() => (
                       <div className="tool-help-content">
                         <div className="popover-heading">
-                          {t("让任务状态与你同步")}
+                          {t("Codex 状态接入说明")}
                         </div>
                         <p>{t("在新终端中执行一次：")}</p>
                         <code>
@@ -791,9 +771,6 @@ function App() {
                     {(close) => (
                       <>
                         <div className="popover-heading">{t("终端配色")}</div>
-                        <p className="popover-description">
-                          {t("为这个终端选择一种氛围。")}
-                        </p>
                         <div className="palette-grid">
                           {terminalThemes.map(([value, label]) => {
                             const colors = terminalTheme(value, resolved);
@@ -885,21 +862,13 @@ function App() {
             </div>
             <div className="page-foot">
               <span>{t("终端运行在你的设备上 · 关闭网页不会结束任务")}</span>
-              <span>ERGENT / 0.1</span>
             </div>
           </div>
         ) : (
           <div className="overview">
             <div className="overview-heading">
               <div>
-                <div className="eyebrow">
-                  {t("YOUR PERSONAL COMMAND CENTER")}
-                </div>
-                <h1>
-                  {t("所有设备，一个工作台")}
-                  <span>{t("。")}</span>
-                </h1>
-                <p>{t("选择一个终端继续工作，或开启新的开发会话。")}</p>
+                <h1>{t("设备与终端")}</h1>
               </div>
               <button
                 className="primary"
@@ -912,12 +881,11 @@ function App() {
             </div>
             <div className="stats">
               <div>
-                <span>{t("CONNECTED MACHINES")}</span>
+                <span>{t("在线设备")}</span>
                 <strong>{online.length}</strong>
-                <small>{t("在线开发设备")}</small>
               </div>
               <div>
-                <span>{t("RUNNING TERMINALS")}</span>
+                <span>{t("运行中的终端")}</span>
                 <strong>
                   {
                     sessions.filter(
@@ -927,24 +895,10 @@ function App() {
                     ).length
                   }
                 </strong>
-                <small>{t("可以继续的会话")}</small>
-              </div>
-              <div className="stats-note">
-                <Radio size={23} />
-                <strong>{t("工作留在本机")}</strong>
-                <small>
-                  {t("浏览器只是入口。代码与进程")}
-                  <br />
-                  {t("始终在你的设备上运行。")}
-                </small>
               </div>
             </div>
             <div className="devices-title">
               <h2>{t("你的设备")}</h2>
-              <button onClick={enroll}>
-                <Plus size={15} />
-                {t("接入设备")}
-              </button>
             </div>
             <div className="device-grid">
               {visible.map((m) => (
@@ -992,21 +946,9 @@ function App() {
                 <div>
                   <Plus size={23} />
                 </div>
-                <strong>{t("接入一台开发机")}</strong>
+                <strong>{t("接入设备")}</strong>
                 <span>{t("macOS、Linux 或 Windows")}</span>
               </button>
-            </div>
-            <div className="getting-started">
-              <div className="step-number">01</div>
-              <div>
-                <strong>{t("从一个真实终端开始")}</strong>
-                <p>
-                  {t(
-                    "接入设备后，可以直接运行 codex、claude、opencode，或你熟悉的任何终端工具。",
-                  )}
-                </p>
-              </div>
-              <TerminalIcon size={26} />
             </div>
           </div>
         )}
@@ -1100,9 +1042,6 @@ function App() {
                     }}
                   />
                 </label>
-                <p className="form-note">
-                  {t("修改显示名称，不会中断终端或正在运行的任务。")}
-                </p>
                 <button
                   className="primary full"
                   disabled={busy || !terminalName.trim()}
@@ -1131,9 +1070,6 @@ function App() {
                     }}
                   />
                 </label>
-                <p className="form-note">
-                  {t("名称保存在服务器，设备离线或重连后仍然保留。")}
-                </p>
                 <button
                   className="primary full"
                   disabled={busy || !deviceName.trim()}
@@ -1189,9 +1125,6 @@ function App() {
                     required
                   />
                 </label>
-                <p className="form-note">
-                  {t("创建设备默认 Shell，随后可直接输入 AI CLI 命令。")}
-                </p>
                 <button className="primary full" disabled={busy}>
                   {t("创建并连接")}
                   <ArrowRight size={17} />

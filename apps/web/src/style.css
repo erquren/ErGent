@@ -374,7 +374,7 @@ p {
 }
 .stats {
   display: grid;
-  grid-template-columns: 1fr 1fr 1.25fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   border: 1px solid #e2e7e9;
   background: #fff;
   border-radius: 10px;
@@ -838,6 +838,10 @@ p {
     transparent 65%
   );
 }
+.login-intro {
+  margin: auto 0;
+  padding: 48px 0;
+}
 .wordmark {
   display: flex;
   align-items: center;
@@ -1047,13 +1051,6 @@ p {
   .overview-heading > .primary {
     margin-top: 18px;
   }
-  .stats {
-    grid-template-columns: 1fr;
-  }
-  .stats > div {
-    border-right: 0;
-    border-bottom: 1px solid #e8ecee;
-  }
   .device-grid {
     grid-template-columns: 1fr;
   }
@@ -1084,9 +1081,6 @@ p {
     padding: 0 10px;
   }
   .terminal-toolbar > div:last-child {
-    display: none;
-  }
-  .page-foot span:last-child {
     display: none;
   }
   .page-foot {
