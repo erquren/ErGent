@@ -1,5 +1,23 @@
 // Canonical UI copy → English. Product names and terminal output are never translated.
 export const english: Record<string, string> = {
+  "查看 {name} 的终端": "View terminals on {name}",
+  查看终端: "View terminals",
+  关闭终端列表: "Close terminal list",
+  "展开 {name} 的终端": "Expand terminals on {name}",
+  "收起 {name} 的终端": "Collapse terminals on {name}",
+  设备管理: "Device management",
+  管理设备: "Manage device",
+  "管理 {name}": "Manage {name}",
+  关闭设备管理: "Close device management",
+  移除设备: "Remove device",
+  "正在移除…": "Removing…",
+  "移除「{name}」？": "Remove “{name}”?",
+  "将断开连接并撤销接入权限，再次使用需要重新注册。设备上的文件不会删除。":
+    "This disconnects the device and revokes its access. Register it again to reconnect. Files on the device will not be deleted.",
+  "该设备有 {count} 个未结束的终端，移除后将无法通过工作台访问。这不会结束设备上的任务。":
+    "This device has {count} active terminals. Removing it prevents workspace access but does not stop tasks on the device.",
+  "该设备有 {count} 个未结束的终端，移除后将无法通过工作台访问。这不会结束设备上的任务。_one":
+    "This device has {count} active terminal. Removing it prevents workspace access but does not stop tasks on the device.",
   登录: "Sign in",
   远程终端: "Remote terminals",
   "在浏览器中访问你的设备终端。":

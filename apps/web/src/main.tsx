@@ -5,11 +5,9 @@ import { createRoot } from "react-dom/client";
 import {
   ArrowUpRight,
   ArrowRight,
-  Folder,
-  Laptop,
+  ChevronRight,
   LogOut,
   Plus,
-  Server,
   Terminal as TerminalIcon,
   X,
   Monitor,
@@ -21,6 +19,7 @@ import {
   Info,
   Check,
   Languages,
+  Settings2,
 } from "lucide-react";
 import type {
   Event,
@@ -28,7 +27,7 @@ import type {
   SessionInfo,
   ToolStatus,
 } from "../../../packages/protocol-ts";
-import { api, waitOperation } from "./api";
+import { api, ApiError, waitOperation } from "./api";
 import { AuthScreen } from "./AuthScreen";
 import { TerminalView } from "./TerminalView";
 import "./style.css";
@@ -39,6 +38,11 @@ import { toolLabel } from "./tool-status";
 import { InventoryReceiver, INVENTORY_TIMEOUT_MS } from "./inventory";
 import { normalizeName, nameValidationMessage } from "./names";
 import { CreatedSessions } from "./created-sessions";
+import { DeviceManager } from "./DeviceManager";
+import { DeviceTerminals } from "./DeviceTerminals";
+import { DeviceMenu } from "./DeviceMenu";
+import { ModalDialog } from "./ModalDialog";
+import "./devices.css";
 
 function App() {
   const { preference, setPreference } = useLanguage();
@@ -119,6 +123,14 @@ function App() {
     </GlassPopover>
   );
   const [navOpen, setNavOpen] = useState(false);
+  const [managerOpen, setManagerOpen] = useState(false);
+  const [terminalListMachineId, setTerminalListMachineId] = useState<
+    string | null
+  >(null);
+  const [collapsedMachines, setCollapsedMachines] = useState<Set<string>>(
+    new Set(),
+  );
+  const removedMachines = useRef(new Set<string>());
   useEffect(() => {
     const viewport = window.visualViewport;
     const update = () => {
@@ -166,7 +178,7 @@ function App() {
   const [connected, setConnected] = useState(false),
     [error, setError] = useState("");
   const [modal, setModal] = useState<
-      "create" | "enroll" | "rename" | "terminal-rename" | null
+      "create" | "enroll" | "rename" | "terminal-rename" | "remove" | null
     >(null),
     [token, setToken] = useState("");
   const [editingSession, setEditingSession] = useState("");
@@ -178,12 +190,20 @@ function App() {
   const [busy, setBusy] = useState(false),
     [confirmClose, setConfirmClose] = useState(false);
   const [toolNotices, setToolNotices] = useState<
-    { eventId: string; sessionId: string; title: string; status: ToolStatus }[]
+    {
+      eventId: string;
+      sessionId: string;
+      machineId: string;
+      title: string;
+      status: ToolStatus;
+    }[]
   >([]);
   const wsRef = useRef<WebSocket | null>(null);
   const createdSessions = useRef(new CreatedSessions());
   useEffect(() => {
     createdSessions.current = new CreatedSessions();
+    removedMachines.current = new Set();
+    setCollapsedMachines(new Set());
     if (!user) return;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -226,6 +246,23 @@ function App() {
           return;
         }
         if (event.type === "inventory.sync") {
+          for (const machine of event.payload.machines) {
+            if (machine.revoked) removedMachines.current.add(machine.id);
+            if (removedMachines.current.has(machine.id)) machine.revoked = true;
+          }
+          event.payload.sessions = event.payload.sessions.filter(
+            (session) => !removedMachines.current.has(session.machineId),
+          );
+          const previousSelection = createdSessions.current.get(
+            selectedRef.current,
+          );
+          if (
+            previousSelection &&
+            removedMachines.current.has(previousSelection.machineId)
+          ) {
+            setSelected(null);
+            setConfirmClose(false);
+          }
           const newNotices = event.payload.sessions.flatMap((s) => {
             const status = s.toolStatus;
             if (
@@ -249,13 +286,19 @@ function App() {
               {
                 eventId: status.eventId,
                 sessionId: s.id,
+                machineId: s.machineId,
                 title: `${m?.name ?? t("设备")} / ${s.title}`,
                 status,
               },
             ];
           });
-          if (newNotices.length)
-            setToolNotices((items) => [...newNotices, ...items].slice(0, 4));
+          setToolNotices((items) =>
+            [...newNotices, ...items]
+              .filter(
+                (notice) => !removedMachines.current.has(notice.machineId),
+              )
+              .slice(0, 4),
+          );
           previousTools = new Map(
             event.payload.sessions
               .filter((s) => s.toolStatus)
@@ -313,6 +356,9 @@ function App() {
     machine = machines.find((m) => m.id === active?.machineId);
   const visible = machines.filter((m) => !m.revoked),
     online = visible.filter((m) => m.online);
+  const terminalListMachine = visible.find(
+    (m) => m.id === terminalListMachineId,
+  );
   const act = async (fn: () => Promise<void>) => {
     setError("");
     setBusy(true);
@@ -362,12 +408,18 @@ function App() {
         throw new Error(t("创建结果缺少会话信息，请刷新会话列表"));
       const created = tracker.accept(session);
       if (created) {
+        setCollapsedMachines((items) => {
+          const next = new Set(items);
+          next.delete(created.machineId);
+          return next;
+        });
         setSessions((items) =>
           items.some((item) => item.id === created.id)
             ? items
             : [...items, created],
         );
         setSelected(created.id);
+        setTerminalListMachineId(null);
       }
     });
   const enroll = () =>
@@ -383,6 +435,41 @@ function App() {
     setDeviceName(m.name);
     setNavOpen(false);
     setModal("rename");
+  };
+  const confirmRemoveMachine = (m: MachineInfo) => {
+    setError("");
+    setMachineId(m.id);
+    setDeviceName(m.name);
+    setNavOpen(false);
+    setModal("remove");
+  };
+  const removeMachine = () => {
+    if (busy) return;
+    void act(async () => {
+      // A 404 means another window has already removed this device.
+      try {
+        await api(`/machines/${machineId}/revoke`, "POST", {});
+      } catch (err) {
+        if (!(err instanceof ApiError) || err.status !== 404) throw err;
+      }
+      removedMachines.current.add(machineId);
+      createdSessions.current.revoke(machineId);
+      setMachines((items) =>
+        items.map((m) =>
+          m.id === machineId ? { ...m, revoked: true, online: false } : m,
+        ),
+      );
+      setSessions(createdSessions.current.visible());
+      setFinishedSession((session) =>
+        session?.machineId === machineId ? null : session,
+      );
+      setToolNotices((items) =>
+        items.filter((notice) => notice.machineId !== machineId),
+      );
+      if (active?.machineId === machineId) setSelected(null);
+      setConfirmClose(false);
+      setModal(null);
+    });
   };
   const renameMachine = () =>
     act(async () => {
@@ -475,33 +562,61 @@ function App() {
         </div>
         <div className="section-heading">
           <span>{t("MACHINES")}</span>
-          <button
-            aria-label={t("接入设备")}
-            title={t("接入设备")}
-            onClick={enroll}
-          >
-            <Plus size={16} />
-          </button>
+          <div className="device-heading-actions">
+            <button
+              aria-label={t("设备管理")}
+              title={t("设备管理")}
+              onClick={() => {
+                setNavOpen(false);
+                setError("");
+                setManagerOpen(true);
+              }}
+            >
+              <Settings2 size={16} />
+            </button>
+            <button
+              aria-label={t("接入设备")}
+              title={t("接入设备")}
+              onClick={enroll}
+            >
+              <Plus size={16} />
+            </button>
+          </div>
         </div>
         <nav className="machine-list">
           {visible.map((m) => (
             <div className="machine-group" key={m.id}>
               <div className="machine-heading">
-                <span className="machine-name">
-                  {m.os === "linux" ? (
-                    <Server size={16} />
-                  ) : (
-                    <Laptop size={16} />
-                  )}
-                  <strong>{m.name}</strong>
-                </span>
                 <button
-                  aria-label={t("重命名 {name}", { name: m.name })}
-                  title={t("重命名设备")}
-                  onClick={() => editMachine(m)}
+                  type="button"
+                  className="machine-name machine-toggle"
+                  aria-label={t(
+                    collapsedMachines.has(m.id)
+                      ? "展开 {name} 的终端"
+                      : "收起 {name} 的终端",
+                    { name: m.name },
+                  )}
+                  aria-expanded={!collapsedMachines.has(m.id)}
+                  aria-controls={`machine-sessions-${m.id}`}
+                  title={m.name}
+                  onClick={() =>
+                    setCollapsedMachines((items) => {
+                      const next = new Set(items);
+                      if (next.has(m.id)) next.delete(m.id);
+                      else next.add(m.id);
+                      return next;
+                    })
+                  }
                 >
-                  <Pencil size={14} />
+                  <ChevronRight size={16} className="machine-chevron" />
+                  <strong>{m.name}</strong>
                 </button>
+                <DeviceMenu
+                  machine={m}
+                  disabled={busy}
+                  onRename={editMachine}
+                  onRemove={confirmRemoveMachine}
+                />
                 <i className={`dot ${m.online ? "green" : ""}`} />
                 <button
                   aria-label={t("在 {name} 新建终端", { name: m.name })}
@@ -511,7 +626,11 @@ function App() {
                   <Plus size={15} />
                 </button>
               </div>
-              <div className="session-list">
+              <div
+                className="session-list"
+                id={`machine-sessions-${m.id}`}
+                hidden={collapsedMachines.has(m.id)}
+              >
                 {sessions
                   .filter((s) => s.machineId === m.id)
                   .map((s) => (
@@ -527,9 +646,6 @@ function App() {
                       <TerminalIcon size={15} />
                       <div>
                         <strong>{s.title}</strong>
-                        <small>
-                          {s.cwd.split(/[/\\]/).filter(Boolean).pop() || s.cwd}
-                        </small>
                         {s.toolStatus && (
                           <small
                             className={`tool-state state-${s.toolStatus.state}`}
@@ -583,6 +699,9 @@ function App() {
                 setMachines([]);
                 setSelected(null);
                 setToolNotices([]);
+                setManagerOpen(false);
+                setTerminalListMachineId(null);
+                setModal(null);
               })
             }
           >
@@ -624,7 +743,7 @@ function App() {
             {t("{count} 台设备在线", { count: online.length })}
           </div>
         </header>
-        {error && (
+        {error && !modal && !managerOpen && !terminalListMachine && (
           <div className="banner error" role="alert">
             {t(error)}
             <button aria-label={t("关闭提示")} onClick={() => setError("")}>
@@ -653,10 +772,6 @@ function App() {
                               : t("运行中")}
                     </span>
                   </h1>
-                  <p>
-                    <Folder size={14} />
-                    {active.cwd}
-                  </p>
                 </div>
                 <div className="page-actions">
                   {active.lifecycle !== "running" &&
@@ -914,13 +1029,12 @@ function App() {
                   </div>
                   <div className="device-name-row">
                     <h3 title={m.name}>{m.name}</h3>
-                    <button
-                      aria-label={t("重命名 {name}", { name: m.name })}
-                      title={t("重命名设备")}
-                      onClick={() => editMachine(m)}
-                    >
-                      <Pencil size={16} />
-                    </button>
+                    <DeviceMenu
+                      machine={m}
+                      disabled={busy}
+                      onRename={editMachine}
+                      onRemove={confirmRemoveMachine}
+                    />
                   </div>
                   <p>
                     {m.os} <span>·</span> {m.arch}
@@ -933,9 +1047,12 @@ function App() {
                       })}
                     </span>
                     <button
-                      disabled={!m.online}
-                      onClick={() => newTerminal(m)}
-                      aria-label={t("打开 {name}", { name: m.name })}
+                      onClick={() => {
+                        setError("");
+                        setTerminalListMachineId(m.id);
+                      }}
+                      aria-label={t("查看 {name} 的终端", { name: m.name })}
+                      title={t("查看终端")}
                     >
                       <ArrowUpRight size={20} />
                     </button>
@@ -964,6 +1081,11 @@ function App() {
               <button
                 onClick={() => {
                   setSelected(n.sessionId);
+                  setCollapsedMachines((items) => {
+                    const next = new Set(items);
+                    next.delete(n.machineId);
+                    return next;
+                  });
                   setNavOpen(false);
                   setToolNotices((items) =>
                     items.filter((i) => i.eventId !== n.eventId),
@@ -987,192 +1109,289 @@ function App() {
           ))}
         </aside>
       )}
+      {terminalListMachine && (
+        <DeviceTerminals
+          machine={terminalListMachine}
+          sessions={sessions.filter(
+            (s) => s.machineId === terminalListMachine.id,
+          )}
+          busy={busy}
+          error={modal ? "" : error}
+          onClose={() => {
+            setTerminalListMachineId(null);
+            setError("");
+          }}
+          onCreate={() => newTerminal(terminalListMachine)}
+          onSelect={(session) => {
+            setSelected(session.id);
+            setConfirmClose(false);
+            setNavOpen(false);
+            setCollapsedMachines((items) => {
+              const next = new Set(items);
+              next.delete(session.machineId);
+              return next;
+            });
+            setTerminalListMachineId(null);
+          }}
+        />
+      )}
+      {managerOpen && (
+        <DeviceManager
+          machines={visible}
+          sessions={sessions}
+          busy={busy}
+          error={modal ? "" : error}
+          onClose={() => {
+            setManagerOpen(false);
+            setError("");
+          }}
+          onEnroll={enroll}
+          onRename={editMachine}
+          onRemove={confirmRemoveMachine}
+        />
+      )}
       {modal && (
-        <div className="modal-backdrop">
-          <section
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="modal-title"
-          >
-            <div className="modal-heading">
-              <h2 id="modal-title">
-                {modal === "create"
-                  ? t("新建终端")
-                  : modal === "terminal-rename"
-                    ? t("重命名终端")
-                    : modal === "rename"
-                      ? t("重命名设备")
+        <ModalDialog
+          className="modal"
+          labelledBy="modal-title"
+          describedBy={
+            modal === "remove" ? "remove-device-description" : undefined
+          }
+          busy={busy}
+          onClose={() => {
+            setModal(null);
+            setToken("");
+            setError("");
+          }}
+        >
+          <div className="modal-heading">
+            <h2 id="modal-title">
+              {modal === "create"
+                ? t("新建终端")
+                : modal === "terminal-rename"
+                  ? t("重命名终端")
+                  : modal === "rename"
+                    ? t("重命名设备")
+                    : modal === "remove"
+                      ? t("移除「{name}」？", { name: deviceName })
                       : t("接入设备")}
-              </h2>
+            </h2>
+            <button
+              aria-label={t("关闭弹窗")}
+              onClick={() => {
+                setModal(null);
+                setToken("");
+                setError("");
+              }}
+              disabled={busy}
+            >
+              <X size={20} />
+            </button>
+          </div>
+          {error && (
+            <div className="error" role="alert">
+              {t(error)}
+            </div>
+          )}
+          {modal === "remove" ? (
+            <>
+              <p id="remove-device-description">
+                {t(
+                  "将断开连接并撤销接入权限，再次使用需要重新注册。设备上的文件不会删除。",
+                )}
+              </p>
+              {sessions.some(
+                (session) =>
+                  session.machineId === machineId &&
+                  ["running", "terminating"].includes(session.lifecycle),
+              ) && (
+                <p className="remove-device-warning">
+                  {t(
+                    "该设备有 {count} 个未结束的终端，移除后将无法通过工作台访问。这不会结束设备上的任务。",
+                    {
+                      count: sessions.filter(
+                        (session) =>
+                          session.machineId === machineId &&
+                          ["running", "terminating"].includes(
+                            session.lifecycle,
+                          ),
+                      ).length,
+                    },
+                  )}
+                </p>
+              )}
+              <div className="dialog-actions">
+                <button
+                  autoFocus
+                  data-dialog-autofocus
+                  disabled={busy}
+                  onClick={() => {
+                    setModal(null);
+                    setError("");
+                  }}
+                >
+                  {t("取消")}
+                </button>
+                <button
+                  className="danger"
+                  disabled={busy}
+                  onClick={removeMachine}
+                >
+                  {t(busy ? "正在移除…" : "移除设备")}
+                </button>
+              </div>
+            </>
+          ) : modal === "terminal-rename" ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void renameTerminal();
+              }}
+            >
+              <label>
+                {t("终端名称")}
+                <input
+                  autoFocus
+                  required
+                  value={terminalName}
+                  onChange={(e) => {
+                    setTerminalName(e.target.value);
+                    e.target.setCustomValidity(
+                      t(nameValidationMessage(e.target.value)),
+                    );
+                  }}
+                />
+              </label>
               <button
-                aria-label={t("关闭弹窗")}
+                className="primary full"
+                disabled={busy || !terminalName.trim()}
+              >
+                {t("保存名称")}
+              </button>
+            </form>
+          ) : modal === "rename" ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void renameMachine();
+              }}
+            >
+              <label>
+                {t("设备名称")}
+                <input
+                  autoFocus
+                  required
+                  value={deviceName}
+                  onChange={(e) => {
+                    setDeviceName(e.target.value);
+                    e.target.setCustomValidity(
+                      t(nameValidationMessage(e.target.value)),
+                    );
+                  }}
+                />
+              </label>
+              <button
+                className="primary full"
+                disabled={busy || !deviceName.trim()}
+              >
+                {t("保存名称")}
+              </button>
+            </form>
+          ) : modal === "create" ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void create();
+              }}
+            >
+              <label>
+                {t("设备")}
+                <select
+                  value={machineId}
+                  onChange={(e) => {
+                    setMachineId(e.target.value);
+                    setCwd(
+                      machines.find((m) => m.id === e.target.value)
+                        ?.defaultCwd || "",
+                    );
+                  }}
+                >
+                  {online.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {t("终端名称")}
+                <input
+                  value={title}
+                  onChange={(e) => {
+                    setTitle(e.target.value);
+                    e.target.setCustomValidity(
+                      t(nameValidationMessage(e.target.value)),
+                    );
+                  }}
+                  required
+                />
+              </label>
+              <label>
+                {t("设备上的工作目录")}
+                <input
+                  value={cwd}
+                  onChange={(e) => setCwd(e.target.value)}
+                  placeholder="/home/me/project"
+                  required
+                />
+              </label>
+              <button className="primary full" disabled={busy}>
+                {t("创建并连接")}
+                <ArrowRight size={17} />
+              </button>
+            </form>
+          ) : (
+            <>
+              <p>
+                {t(
+                  "在目标设备上运行 Agent 注册命令，然后输入下面的一次性凭据。凭据 10 分钟内有效。",
+                )}
+              </p>
+              <code className="command-block">
+                ergent-agent enroll --server {location.origin}{" "}
+                {t('--name "我的开发机"')}
+              </code>
+              <div className="token-label">
+                {t("一次性注册凭据")}
+                <button
+                  onClick={() =>
+                    void copyText(token).catch(() =>
+                      setError("复制失败，请手动复制"),
+                    )
+                  }
+                >
+                  <Copy size={14} />
+                  {t("复制")}
+                </button>
+              </div>
+              <code className="token">{token}</code>
+              <p className="form-note">
+                {t("注册后运行")}
+                <code>ergent-agent run</code>
+                {t("。使用默认配置路径时，在同一目录运行两条命令。")}
+              </p>
+              <button
+                className="primary full"
                 onClick={() => {
                   setModal(null);
                   setToken("");
                 }}
-                disabled={busy}
               >
-                <X size={20} />
+                {t("完成，等待设备连接")}
               </button>
-            </div>
-            {error && (
-              <div className="error" role="alert">
-                {t(error)}
-              </div>
-            )}
-            {modal === "terminal-rename" ? (
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void renameTerminal();
-                }}
-              >
-                <label>
-                  {t("终端名称")}
-                  <input
-                    autoFocus
-                    required
-                    value={terminalName}
-                    onChange={(e) => {
-                      setTerminalName(e.target.value);
-                      e.target.setCustomValidity(
-                        t(nameValidationMessage(e.target.value)),
-                      );
-                    }}
-                  />
-                </label>
-                <button
-                  className="primary full"
-                  disabled={busy || !terminalName.trim()}
-                >
-                  {t("保存名称")}
-                </button>
-              </form>
-            ) : modal === "rename" ? (
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void renameMachine();
-                }}
-              >
-                <label>
-                  {t("设备名称")}
-                  <input
-                    autoFocus
-                    required
-                    value={deviceName}
-                    onChange={(e) => {
-                      setDeviceName(e.target.value);
-                      e.target.setCustomValidity(
-                        t(nameValidationMessage(e.target.value)),
-                      );
-                    }}
-                  />
-                </label>
-                <button
-                  className="primary full"
-                  disabled={busy || !deviceName.trim()}
-                >
-                  {t("保存名称")}
-                </button>
-              </form>
-            ) : modal === "create" ? (
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void create();
-                }}
-              >
-                <label>
-                  {t("设备")}
-                  <select
-                    value={machineId}
-                    onChange={(e) => {
-                      setMachineId(e.target.value);
-                      setCwd(
-                        machines.find((m) => m.id === e.target.value)
-                          ?.defaultCwd || "",
-                      );
-                    }}
-                  >
-                    {online.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  {t("终端名称")}
-                  <input
-                    value={title}
-                    onChange={(e) => {
-                      setTitle(e.target.value);
-                      e.target.setCustomValidity(
-                        t(nameValidationMessage(e.target.value)),
-                      );
-                    }}
-                    required
-                  />
-                </label>
-                <label>
-                  {t("设备上的工作目录")}
-                  <input
-                    value={cwd}
-                    onChange={(e) => setCwd(e.target.value)}
-                    placeholder="/home/me/project"
-                    required
-                  />
-                </label>
-                <button className="primary full" disabled={busy}>
-                  {t("创建并连接")}
-                  <ArrowRight size={17} />
-                </button>
-              </form>
-            ) : (
-              <>
-                <p>
-                  {t(
-                    "在目标设备上运行 Agent 注册命令，然后输入下面的一次性凭据。凭据 10 分钟内有效。",
-                  )}
-                </p>
-                <code className="command-block">
-                  ergent-agent enroll --server {location.origin}{" "}
-                  {t('--name "我的开发机"')}
-                </code>
-                <div className="token-label">
-                  {t("一次性注册凭据")}
-                  <button
-                    onClick={() =>
-                      void copyText(token).catch(() =>
-                        setError("复制失败，请手动复制"),
-                      )
-                    }
-                  >
-                    <Copy size={14} />
-                    {t("复制")}
-                  </button>
-                </div>
-                <code className="token">{token}</code>
-                <p className="form-note">
-                  {t("注册后运行")}
-                  <code>ergent-agent run</code>
-                  {t("。使用默认配置路径时，在同一目录运行两条命令。")}
-                </p>
-                <button
-                  className="primary full"
-                  onClick={() => {
-                    setModal(null);
-                    setToken("");
-                  }}
-                >
-                  {t("完成，等待设备连接")}
-                </button>
-              </>
-            )}
-          </section>
-        </div>
+            </>
+          )}
+        </ModalDialog>
       )}
     </div>
   );

@@ -578,13 +578,81 @@ test("mobile layout, terminal shortcuts and compact viewport", async ({
       "Mobile terminal",
     );
     await expect(page.locator(".page-heading h1")).toBeVisible();
-    await expect(page.locator(".page-heading p")).toBeVisible();
+    await expect(page.locator(".page-heading p")).toHaveCount(0);
     await expect(page.locator(".terminal-toolbar")).toBeVisible();
     await page.screenshot({ path: "test-results/mobile-terminal-desktop.png" });
   } finally {
     await context.close();
     await api.post(`/api/v1/sessions/${sessionId}/close`, {
       headers: { ...headers(), "Idempotency-Key": randomUUID() },
+      data: {},
+    });
+  }
+});
+
+test("device management revokes offline enrollment and rejects its old credential", async ({
+  browser,
+}) => {
+  const tokenResponse = await api.post("/api/v1/enrollments", {
+    headers: headers(),
+    data: {},
+  });
+  expect(tokenResponse.ok()).toBeTruthy();
+  const enrolled = await api.post("/api/v1/agent/enroll", {
+    data: {
+      enrollmentToken: (await tokenResponse.json()).data.token,
+      name: "Device to remove",
+      os: "linux",
+      arch: "x86_64",
+    },
+  });
+  expect(enrolled.ok()).toBeTruthy();
+  const device = (await enrolled.json()).data;
+  const context = await browser.newContext({
+    locale: "zh-CN",
+    storageState: await api.storageState(),
+  });
+  try {
+    const page = await context.newPage();
+    await page.goto(origin);
+    await page.getByRole("button", { name: "设备管理", exact: true }).click();
+    const drawer = page.getByRole("dialog", { name: "设备管理", exact: true });
+    await expect(
+      drawer.getByRole("listitem").filter({ hasText: "Device to remove" }),
+    ).toContainText("离线");
+    await drawer
+      .getByRole("button", { name: "管理 Device to remove", exact: true })
+      .click();
+    await page.getByRole("button", { name: "移除设备", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "移除「Device to remove」？", exact: true })
+      .getByRole("button", { name: "移除设备", exact: true })
+      .click();
+    await expect(
+      drawer.getByRole("heading", { name: "Device to remove", exact: true }),
+    ).toHaveCount(0);
+    await page.reload();
+    await expect(
+      page.locator(".device-card").filter({ hasText: "Test Mac" }),
+    ).toBeVisible();
+    await expect(
+      page.locator(".device-card").filter({ hasText: "Device to remove" }),
+    ).toHaveCount(0);
+    const reconnect = await api.get("/api/v1/ws/agent", {
+      headers: {
+        Authorization: `Bearer ${device.secret}`,
+        Connection: "Upgrade",
+        Upgrade: "websocket",
+        "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+        "Sec-WebSocket-Version": "13",
+        "Sec-WebSocket-Protocol": "ergent.preview.v3",
+      },
+    });
+    expect(reconnect.status()).toBe(401);
+  } finally {
+    await context.close();
+    await api.post(`/api/v1/machines/${device.machineId}/revoke`, {
+      headers: headers(),
       data: {},
     });
   }
@@ -603,9 +671,10 @@ test("rename persists across reconnect and exited terminals disappear", async ({
     await page.goto(origin);
     await observer.goto(origin);
     await page
-      .getByRole("button", { name: "重命名 Test Mac", exact: true })
+      .getByRole("button", { name: "管理 Test Mac", exact: true })
       .first()
       .click();
+    await page.getByRole("button", { name: "重命名设备", exact: true }).click();
     await page.getByLabel("设备名称", { exact: true }).fill("研发机 ARM64");
     await page.getByRole("button", { name: "保存名称" }).click();
     await expect(observer.locator(".machine-name")).toContainText(
