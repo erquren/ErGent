@@ -33,20 +33,39 @@ export class CreatedSessions {
   private inventory = new Map<string, SessionInfo>();
   private pending = new Map<string, SessionInfo>();
   private availableMachines = new Set<string>();
+  private revokedMachines = new Set<string>();
+
+  revoke(machineId: string) {
+    this.revokedMachines.add(machineId);
+    this.availableMachines.delete(machineId);
+    for (const items of [this.inventory, this.pending]) {
+      for (const [id, session] of items) {
+        if (session.machineId === machineId) items.delete(id);
+      }
+    }
+  }
 
   receive(machines: MachineInfo[], sessions: SessionInfo[]): SessionInfo[] {
+    for (const machine of machines) {
+      if (machine.revoked) this.revoke(machine.id);
+    }
     this.inventory = new Map(
-      sessions.map((session) => [
-        session.id,
-        preserveLifecycle(
-          this.inventory.get(session.id) ?? this.pending.get(session.id),
-          session,
-        ),
-      ]),
+      sessions
+        .filter((session) => !this.revokedMachines.has(session.machineId))
+        .map((session) => [
+          session.id,
+          preserveLifecycle(
+            this.inventory.get(session.id) ?? this.pending.get(session.id),
+            session,
+          ),
+        ]),
     );
     this.availableMachines = new Set(
       machines
-        .filter((machine) => !machine.revoked)
+        .filter(
+          (machine) =>
+            !machine.revoked && !this.revokedMachines.has(machine.id),
+        )
         .map((machine) => machine.id),
     );
     for (const [id, session] of this.pending) {

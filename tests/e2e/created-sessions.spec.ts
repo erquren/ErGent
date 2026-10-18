@@ -27,6 +27,24 @@ const session: SessionInfo = {
   toolStatus: null,
 };
 
+test("confirmed removal rejects delayed inventories and create results without affecting other devices", () => {
+  const tracker = new CreatedSessions();
+  const otherMachine = { ...machine, id: "other" };
+  const otherSession = {
+    ...session,
+    id: "other-session",
+    machineId: otherMachine.id,
+  };
+  tracker.receive([machine, otherMachine], [session, otherSession]);
+  tracker.revoke(machine.id);
+  expect(tracker.visible()).toEqual([otherSession]);
+  expect(tracker.get(session.id)).toBeUndefined();
+  expect(tracker.accept(session)).toBeUndefined();
+  expect(
+    tracker.receive([machine, otherMachine], [session, otherSession]),
+  ).toEqual([otherSession]);
+});
+
 test("create result survives inventory lag and is acknowledged once", () => {
   const tracker = new CreatedSessions();
   tracker.receive([machine], []);

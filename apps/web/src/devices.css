@@ -1,0 +1,231 @@
+.device-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.machine-heading .machine-toggle {
+  justify-content: flex-start;
+  text-align: left;
+  opacity: 1;
+  min-height: 32px;
+}
+.machine-chevron {
+  flex-shrink: 0;
+}
+.machine-toggle[aria-expanded="true"] .machine-chevron {
+  transform: rotate(90deg);
+}
+.session-list[hidden] {
+  display: none;
+}
+.device-menu-trigger {
+  flex-shrink: 0;
+}
+.device-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: 176px;
+  padding: 6px;
+  border: 1px solid var(--glass-line);
+  border-radius: 16px;
+  color: var(--text);
+  background: var(--glass-solid);
+  box-shadow: var(--glass-shadow);
+}
+.device-menu > button {
+  width: 100%;
+  min-height: 44px;
+  justify-content: flex-start;
+  border: 0;
+  background: transparent;
+}
+.device-menu > button:hover {
+  background: var(--accent-soft);
+}
+.device-menu > .device-remove {
+  color: #b13e45;
+}
+:root[data-theme="dark"] .device-menu > .device-remove {
+  color: #ff9c9c;
+}
+dialog.modal {
+  margin: auto;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  color: var(--text);
+}
+dialog::backdrop {
+  background: #10192d66;
+  backdrop-filter: blur(4px);
+}
+.modal-heading h2 {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.modal-heading > button {
+  flex-shrink: 0;
+}
+.device-manager {
+  position: fixed;
+  inset: 0 0 0 auto;
+  margin: 0;
+  width: 440px;
+  max-width: 100vw;
+  height: 100dvh;
+  max-height: 100dvh;
+  padding: 0;
+  border: 1px solid var(--glass-line);
+  border-radius: 26px 0 0 26px;
+  background: var(--glass-solid);
+  color: var(--text);
+  box-shadow: var(--glass-shadow);
+}
+.device-manager[open] {
+  display: flex;
+  flex-direction: column;
+}
+.device-manager-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 24px;
+  border-bottom: 1px solid var(--border);
+}
+.device-manager-heading h2 {
+  font-size: 20px;
+  font-weight: 600;
+}
+.device-manager-heading button {
+  border: 0;
+  background: transparent;
+}
+.device-manager-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 24px;
+}
+.device-manager-list ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.managed-device {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 20px 0;
+}
+.managed-device + .managed-device {
+  border-top: 1px solid var(--border);
+}
+.managed-device-icon {
+  flex-shrink: 0;
+  margin-top: 6px;
+  color: var(--accent);
+}
+.managed-device-info {
+  min-width: 0;
+  flex: 1;
+}
+.managed-device h3 {
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.managed-device p {
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.managed-device-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 12px;
+  color: var(--secondary);
+  font-size: 11px;
+}
+.managed-device-status > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.managed-device > button {
+  padding: 8px;
+  border: 0;
+  background: transparent;
+}
+.device-manager-empty {
+  padding: 40px 0;
+  text-align: center;
+  color: var(--muted);
+}
+.device-manager footer {
+  padding: 20px 24px;
+  border-top: 1px solid var(--border);
+}
+.device-terminals-heading {
+  min-width: 0;
+  flex: 1;
+}
+.device-terminals-heading h2 {
+  overflow-wrap: anywhere;
+}
+.device-terminal-row {
+  width: 100%;
+  min-height: 60px;
+  margin: 6px 0;
+  padding: 14px;
+  gap: 12px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: transparent;
+}
+.device-terminal-row:hover {
+  background: var(--accent-soft);
+}
+.device-terminal-row span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.device-terminal-row svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+}
+.modal .remove-device-warning {
+  margin-top: 14px;
+  color: var(--text);
+}
+@media (max-width: 760px) {
+  .device-manager {
+    width: 100vw;
+    border-radius: 0;
+  }
+  .device-manager-heading {
+    padding: 18px;
+  }
+  .device-manager-list {
+    padding: 8px 18px;
+  }
+  .device-manager footer {
+    padding: 18px 18px max(18px, env(safe-area-inset-bottom));
+  }
+  .device-heading-actions button,
+  .device-menu-trigger {
+    min-width: 36px;
+    min-height: 36px;
+  }
+}
