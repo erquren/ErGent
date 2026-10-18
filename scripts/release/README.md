@@ -178,8 +178,8 @@ Existing non-TTY automation supplies one password through stdin and closes the s
 Create a one-time enrollment token in the web UI, then run on the development machine (use `.exe` on Windows):
 
 ```sh
-./ergent-agent enroll --server https://terminal.example.com --name My-PC
-./ergent-agent run
+./ergent-client enroll --server https://terminal.example.com --name My-PC
+./ergent-client run
 ```
 
 将地址换成 Server 的实际 HTTPS 地址，非默认端口也要写上。注册令牌隐藏输入，粘贴一次后按 Enter 完成，**无需 Ctrl-D/Ctrl-Z**。不要把令牌放入参数、环境变量或日志。
@@ -195,9 +195,9 @@ HTTP is allowed only for loopback testing. Remote connections, including Tailsca
 For a private CA, provide its public PEM certificate only:
 
 ```sh
-./ergent-agent --ca-cert /path/to/root-ca.pem \
+./ergent-client --ca-cert /path/to/root-ca.pem \
   enroll --server https://terminal.example.com --name My-PC
-./ergent-agent run
+./ergent-client run
 ```
 
 Agent 保存 CA 的绝对路径，`run` 自动复用；文件须保持可读，更新后重启 Agent。临时覆盖可用 `--ca-cert 路径 run`。浏览器也需信任该 CA，IP 访问须有匹配 IP SAN，不要关闭证书校验。
@@ -206,6 +206,17 @@ The CA path is saved and reused for HTTPS/WSS. Keep it readable and restart Agen
 后台服务需自行配置。关闭网页不结束终端；Agent 或操作系统重启不能恢复原进程。
 Configure background services separately. Closing the browser leaves terminals running; restarting Agent or the OS cannot restore their processes.
 
+## 服务端掉线与恢复 / Server outages and recovery
+
+只要 `ergent-client run` 和设备仍在运行，服务端掉线或重启不会结束已有终端和任务。客户端自动重试连接：每次连接结束后的等待依次约为 1、2、4、8、16、30 秒，之后保持约 30 秒，另加不足 0.5 秒随机延迟。断线检测和连接尝试还需要时间；成功连接不会重置本次运行期间的退避计数。服务端恢复后，客户端重新上报终端，仍在运行的 Shell 保留工作目录和进程状态。
+While the client process and device remain running, a Server outage or restart does not terminate their terminals or tasks. The client retries after waits of approximately 1, 2, 4, 8, 16 and then 30 seconds, plus less than 0.5 seconds of jitter. Detection and connection attempts take additional time; successful connections do not reset this process's backoff. On reconnection, the client reports its terminals again, preserving running shells and their working directories.
+
+恢复需要沿用服务端数据库和有效设备凭据，保持服务端地址、证书信任和协议兼容。Docker 重建时保留原数据卷；不要为恢复服务端连接而重启客户端。客户端或设备自身重启无法恢复原进程。
+Keep the Server database and valid device credentials, with compatible address, certificate trust and protocol settings. Preserve the data volume when recreating Docker containers. Do not restart the client just to reconnect: restarting the client or device cannot restore the original processes.
+
+当前网页断线后约 1.5 秒检查登录状态；若服务端仍不可用，检查失败会返回登录页。服务恢复后刷新页面，必要时重新登录并选择原终端。每终端只保留最近 512 KiB 原始输出缓存；满足条件时续传，否则恢复当前屏幕，完整滚动历史不保证保留。重新登录或刷新后也不能恢复原浏览器滚动历史。断线时未确认的输入不会自动重发。
+The web UI checks authentication about 1.5 seconds after disconnection. If the Server is still unavailable, that failed check returns to the login page. Refresh after recovery, sign in if needed, and select the original terminal. Each terminal retains only 512 KiB of raw output: eligible connections resume from their cursor; otherwise they restore the current screen. Full scrollback is not guaranteed, and browser history does not survive re-login or refresh. Unconfirmed input is never replayed automatically.
+
 ## 更新与平台要求
 
 先停止 Server/Agent，备份 `.local/`；替换二进制、web 和启动脚本，保留原数据。
@@ -213,7 +224,15 @@ Configure background services separately. Closing the browser leaves terminals r
 发布包不含密码、令牌、数据库、AI CLI 或开发环境。
 manifest.json 记录版本、Git commit、工作区是否有未提交修改及文件校验值；外部 .sha256 校验压缩包。
 
-### 升级到 1.2.0 / Upgrade to 1.2.0
+### 升级到 1.3.0 / Upgrade to 1.3.0
+
+本版新增设备管理、设备移除、终端展开/收起及首页设备终端列表。客户端由 `ergent-agent` 更名为 `ergent-client`（Windows 使用 `.exe`），服务端仍为 `ergent-server`；更新后台服务及脚本中的程序路径。已有 `.local/agent.json` 或自定义 `--config` 配置继续有效，无需重新注册。之前安装过 Codex hooks 时，请移除指向旧程序的 ErGent hook，再执行 `ergent-client setup-codex` 并在 `/hooks` 中确认信任。
+This release adds device management, device removal, collapsible terminal lists and terminal browsing from overview cards. The client executable is renamed from `ergent-agent` to `ergent-client` (`.exe` on Windows); the server remains `ergent-server`. Update service and script paths. Existing client configurations remain valid without re-enrollment. If Codex hooks reference the old executable, remove those ErGent hooks, run `ergent-client setup-codex`, and review trust in `/hooks`.
+
+从 1.2.0 升级时保留原数据库与客户端配置；协议仍为 `ergent.preview.v3`。只重启服务端时客户端自动重连，重启客户端则不能恢复原终端进程。Docker `1.3.0` 镜像在 AMD64/ARM64 原生机器上分别构建后合并发布。
+Keep the database and client configuration when upgrading from 1.2.0; the protocol remains `ergent.preview.v3`. Clients reconnect after a server-only restart, but restarting a client cannot restore its terminal processes. Docker `1.3.0` combines native AMD64 and ARM64 builds.
+
+### 升级到 1.2.0（历史说明）/ Upgrade to 1.2.0 (historical)
 
 从 1.1.0 升级时，首次启动会执行 `0005_first_account_setup.sql`。已有账户继续直接登录，网页首次初始化会永久关闭；空数据库使用一次性初始化码或 `admin-create` 创建首个账户。请备份实际使用的数据库、Agent 配置、部署配置和证书；回退时同时恢复旧程序及升级前同一时点的数据库备份。
 On upgrade from 1.1.0, startup applies `0005_first_account_setup.sql`. Existing accounts log in directly and first-account setup is permanently closed. Empty databases use a setup code or `admin-create`. Back up the actual database, Agent configuration, deployment configuration and certificates; restore the old programs together with the matching pre-upgrade database backup when rolling back.

@@ -42,7 +42,7 @@ def verify(archive):
     if archive.name != f"ergent-{manifest['version']}-{target}{extension}" or root + extension != archive.name:
         raise ValueError('Archive name differs from manifest')
     suffix = '.exe' if extension == '.zip' else ''
-    required = {'ergent-server' + suffix, 'ergent-agent' + suffix, 'web/index.html', 'README.md',
+    required = {'ergent-server' + suffix, 'ergent-client' + suffix, 'web/index.html', 'README.md',
                 'start-server.cmd' if suffix else 'start-server.sh'}
     if not required.issubset(contents):
         raise ValueError('Required runtime files missing')

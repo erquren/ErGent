@@ -1,5 +1,5 @@
 [package]
-name = "ergent-agent"
+name = "ergent-client"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

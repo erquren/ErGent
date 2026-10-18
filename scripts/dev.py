@@ -42,7 +42,7 @@ def main():
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     suffix = ".exe" if os.name == "nt" else ""
     server = ROOT / f"target/debug/ergent-server{suffix}"
-    agent = ROOT / f"target/debug/ergent-agent{suffix}"
+    agent = ROOT / f"target/debug/ergent-client{suffix}"
     if not server.exists() or not agent.exists() or not (ROOT / "apps/web/dist/index.html").exists():
         raise SystemExit("先执行 sh scripts/cargo.sh build --workspace 和 sh scripts/pnpm.sh build")
     database = folder / "server.db"

@@ -12,8 +12,8 @@
 ./ergent-server setup-code --help
 ./ergent-server admin-create --help
 ./ergent-server login-unblock --help
-./ergent-agent --help
-./ergent-agent enroll --help
+./ergent-client --help
+./ergent-client enroll --help
 ```
 
 顶层帮助显示命令概览，子命令的 `--help` 显示详细参数。
@@ -79,12 +79,12 @@
 
 | 命令 | 用途 |
 | --- | --- |
-| `ergent-agent enroll --server URL --name NAME` | 输入一次性令牌并注册设备 |
-| `ergent-agent run` | 使用已保存的配置连接服务端 |
-| `ergent-agent doctor` | 检查运行环境 |
-| `ergent-agent setup-codex` | 安装 Codex hooks |
-| `ergent-agent codex [ARGS...]` | 启动 Codex 并接收完成通知 |
-| `ergent-agent tool-event` | 从 stdin 读取工具事件 JSON |
+| `ergent-client enroll --server URL --name NAME` | 输入一次性令牌并注册设备 |
+| `ergent-client run` | 使用已保存的配置连接服务端 |
+| `ergent-client doctor` | 检查运行环境 |
+| `ergent-client setup-codex` | 安装 Codex hooks |
+| `ergent-client codex [ARGS...]` | 启动 Codex 并接收完成通知 |
+| `ergent-client tool-event` | 从 stdin 读取工具事件 JSON |
 
 ### 配置与证书参数
 
@@ -96,9 +96,9 @@
 | `enroll --name NAME` | 设备名，默认 `My development machine` |
 
 ```sh
-./ergent-agent --config /path/to/agent.json enroll --server https://terminal.example.com --name My-PC
-./ergent-agent --config /path/to/agent.json run
-./ergent-agent --config /path/to/agent.json --ca-cert /path/to/root-ca.pem run
+./ergent-client --config /path/to/agent.json enroll --server https://terminal.example.com --name My-PC
+./ergent-client --config /path/to/agent.json run
+./ergent-client --config /path/to/agent.json --ca-cert /path/to/root-ca.pem run
 ```
 
 注册令牌在交互终端隐藏输入，粘贴一次后按 Enter；既有非 TTY 自动化从 stdin 提供一次令牌并关闭输入流（EOF）。令牌不放入参数、环境变量或日志。

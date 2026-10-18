@@ -458,7 +458,7 @@ class SmokeTest:
                     "The running PID 1 does not have the expected non-root identity.")
         pid1 = self.docker("exec", self.server, "cat", "/proc/1/cmdline").stdout
         require(pid1.split(b"\0")[0] == b"/app/ergent-server", "The server is not PID 1.")
-        self.docker("exec", self.server, "sh", "-c", "test ! -e /app/ergent-agent && test -s /data/server.db")
+        self.docker("exec", self.server, "sh", "-c", "test ! -e /app/ergent-client && test -s /data/server.db")
         require(client.json("/api/v1/auth/setup") == {"data": {"required": True}},
                 "A fresh volume did not require first-account setup.")
         self.logs_are_private()

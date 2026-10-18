@@ -8,9 +8,11 @@ ErGent 是一个浏览器里的个人开发工作台，用于集中访问多台�
 
 支持多设备、终端卡片、断线重连、单写入者接管，以及终端重命名、配色、明暗主题和中英文界面。
 
+服务端程序为 `ergent-server`，客户端程序为 `ergent-client`；Windows 下分别为 `ergent-server.exe` 和 `ergent-client.exe`。
+
 A personal development workspace in your browser, with native Agents exposing real shell terminals across your devices.
 
-**当前版本：v1.2.0** · [下载发布包](https://github.com/erquren/ErGent/releases) · [Docker Hub](https://hub.docker.com/r/erquren/ergent)
+**当前版本：v1.3.0** · [下载发布包](https://github.com/erquren/ErGent/releases) · [Docker Hub](https://hub.docker.com/r/erquren/ergent)
 
 原生包支持 Windows、Linux、macOS 的 x86_64 / ARM64；Docker 镜像支持 Linux amd64 / arm64，具体标签以实际发布结果为准。
 

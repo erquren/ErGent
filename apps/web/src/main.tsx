@@ -1358,7 +1358,7 @@ function App() {
                 )}
               </p>
               <code className="command-block">
-                ergent-agent enroll --server {location.origin}{" "}
+                ergent-client enroll --server {location.origin}{" "}
                 {t('--name "我的开发机"')}
               </code>
               <div className="token-label">
@@ -1377,7 +1377,7 @@ function App() {
               <code className="token">{token}</code>
               <p className="form-note">
                 {t("注册后运行")}
-                <code>ergent-agent run</code>
+                <code>ergent-client run</code>
                 {t("。使用默认配置路径时，在同一目录运行两条命令。")}
               </p>
               <button

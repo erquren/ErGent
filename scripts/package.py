@@ -61,8 +61,8 @@ def sha256(path):
 
 def validate_versions(metadata, web_version, expected_version=None):
     packages = {p['name']: p['version'] for p in metadata['packages']
-                if p['name'] in ('ergent-server', 'ergent-agent')}
-    if set(packages) != {'ergent-server', 'ergent-agent'} or len(set(packages.values())) != 1:
+                if p['name'] in ('ergent-server', 'ergent-client')}
+    if set(packages) != {'ergent-server', 'ergent-client'} or len(set(packages.values())) != 1:
         raise ValueError('Server and Agent must both be present and have the same version.')
     version = packages['ergent-server']
     if web_version != version:
@@ -104,7 +104,7 @@ def main():
     run([pnpm, 'install', '--frozen-lockfile'], env)
     run([pnpm, 'build'], env)
     run([cargo, 'build', '--locked', '--release', '--target', triple,
-         '-p', 'ergent-server', '-p', 'ergent-agent'], env)
+         '-p', 'ergent-server', '-p', 'ergent-client'], env)
     web = ROOT / 'apps/web/dist'
     if not (web / 'index.html').is_file():
         raise RuntimeError('Frontend build did not produce index.html')
@@ -115,7 +115,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='ergent-package-') as tmp:
         bundle = Path(tmp) / name
         bundle.mkdir()
-        for binary in ('ergent-server', 'ergent-agent'):
+        for binary in ('ergent-server', 'ergent-client'):
             dest = bundle / (binary + suffix)
             shutil.copy2(Path(env['CARGO_TARGET_DIR']) / triple / 'release' / dest.name, dest)
             # Execute the actual distributed binaries, not debug copies.

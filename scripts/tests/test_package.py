@@ -17,7 +17,7 @@ import package
 def metadata(server='1.2.0', agent='1.2.0'):
     return {'packages': [
         {'name': name, 'version': version}
-        for name, version in [('ergent-server', server), ('ergent-agent', agent)]
+        for name, version in [('ergent-server', server), ('ergent-client', agent)]
         if version is not None
     ]}
 

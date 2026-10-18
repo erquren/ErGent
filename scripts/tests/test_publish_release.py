@@ -36,7 +36,7 @@ def make_archive(directory, platform, *, version='1.0.0', commit=COMMIT,
     root = f'ergent-{version}-{platform}'
     files = {
         'ergent-server' + suffix: b'fixture server\n',
-        'ergent-agent' + suffix: b'fixture agent\n',
+        'ergent-client' + suffix: b'fixture agent\n',
         'web/index.html': b'<html>Fixture UI</html>\n',
         'README.md': b'Fixture readme\n',
         'start-server.cmd' if windows else 'start-server.sh': b'fixture launcher\n',

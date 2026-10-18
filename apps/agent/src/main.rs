@@ -26,7 +26,7 @@ use uuid::Uuid;
 #[derive(Parser)]
 #[command(
     about = "ErGent 原生客户端 / Native Agent",
-    after_help = "注册 / Enroll: ergent-agent enroll --server https://example.com\n运行 / Run: ergent-agent run\n私有 CA / Private CA: add --ca-cert /path/ca.pem at enrollment; its path is saved.\n令牌隐藏输入，回车结束 / Token input is hidden; press Enter. Pipes keep bounded EOF input."
+    after_help = "注册 / Enroll: ergent-client enroll --server https://example.com\n运行 / Run: ergent-client run\n私有 CA / Private CA: add --ca-cert /path/ca.pem at enrollment; its path is saved.\n令牌隐藏输入，回车结束 / Token input is hidden; press Enter. Pipes keep bounded EOF input."
 )]
 struct Cli {
     #[arg(long, default_value = ".local/agent.json", global = true)]
@@ -367,10 +367,10 @@ mod config_tests {
     #[test]
     fn ca_cert_option_is_global_and_overrides_saved_path() {
         for args in [
-            vec!["ergent-agent", "--ca-cert", "new.pem", "run"],
-            vec!["ergent-agent", "run", "--ca-cert", "new.pem"],
+            vec!["ergent-client", "--ca-cert", "new.pem", "run"],
+            vec!["ergent-client", "run", "--ca-cert", "new.pem"],
             vec![
-                "ergent-agent",
+                "ergent-client",
                 "enroll",
                 "--server",
                 "https://example.com",
@@ -387,7 +387,7 @@ mod config_tests {
         let config: Config = serde_json::from_str(
             r#"{"server":"https://example.com","machineId":"id","secret":"test","caCert":"saved.pem"}"#,
         ).unwrap();
-        let cli = Cli::try_parse_from(["ergent-agent", "run", "--ca-cert", "new.pem"]).unwrap();
+        let cli = Cli::try_parse_from(["ergent-client", "run", "--ca-cert", "new.pem"]).unwrap();
         assert_eq!(
             cli.ca_cert.as_deref().or(config.ca_cert.as_deref()),
             Some(std::path::Path::new("new.pem"))

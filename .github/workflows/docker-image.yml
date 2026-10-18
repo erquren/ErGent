@@ -13,44 +13,56 @@ on:
 permissions:
   contents: read
 
+# Serialize publication so two runs cannot race to replace the same version tag.
+concurrency:
+  group: docker-image-manual
+  cancel-in-progress: false
+
 jobs:
   validate:
     uses: ./.github/workflows/docker-validation.yml
 
-  publish:
-    needs: validate
+  prepare:
     if: ${{ inputs.publish }}
     runs-on: ubuntu-24.04
-    environment: dockerhub
-    permissions:
-      contents: read
+    outputs:
+      tags: ${{ steps.image.outputs.tags }}
+      version: ${{ steps.image.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Check project versions and select Docker Hub tags
+      - name: Check project versions and select Docker Hub version tag
         id: image
-        shell: python
-        run: |
-          import json
-          import os
-          from pathlib import Path
-          import tomllib
+        run: python scripts/docker_tags.py
 
-          version = tomllib.loads(Path('Cargo.toml').read_text(encoding='utf-8'))['workspace']['package']['version']
-          web_version = json.loads(Path('apps/web/package.json').read_text(encoding='utf-8'))['version']
-          if web_version != version:
-              raise SystemExit(f'Web version {web_version} does not match Rust version {version}')
-          tags = [f'docker.io/erquren/ergent:sha-{os.environ["GITHUB_SHA"]}']
-          if os.environ['GITHUB_REF_TYPE'] == 'tag':
-              expected = f'v{version}'
-              if os.environ['GITHUB_REF_NAME'] != expected:
-                  raise SystemExit(f'Expected version tag {expected}')
-              tags.append(f'docker.io/erquren/ergent:{version}')
-          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
-              output.write('tags<<IMAGE_TAGS\n' + '\n'.join(tags) + '\nIMAGE_TAGS\n')
-      - uses: docker/setup-qemu-action@v3
+  build:
+    name: Publish native Linux ${{ matrix.architecture }}
+    needs: [validate, prepare]
+    if: ${{ inputs.publish }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            architecture: amd64
+          - runner: ubuntu-24.04-arm
+            architecture: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    environment: dockerhub
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm native runner architecture
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+        shell: bash
+        run: |
+          case "$ARCHITECTURE:$(uname -m)" in
+            amd64:x86_64|arm64:aarch64) ;;
+            *) echo 'Runner architecture does not match image target' >&2; exit 1 ;;
+          esac
       - uses: docker/setup-buildx-action@v3
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -58,28 +70,78 @@ jobs:
           registry: docker.io
           username: ${{ vars.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Build and push both architectures
+      - name: Build native image and push by digest
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.image.outputs.tags }}
+          platforms: linux/${{ matrix.architecture }}
+          outputs: type=image,name=docker.io/erquren/ergent,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=docker-${{ matrix.architecture }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.architecture }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-      - name: Record published image
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+      - name: Export image digest
         env:
-          IMAGE_TAGS: ${{ steps.image.outputs.tags }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          ARCHITECTURE: ${{ matrix.architecture }}
         shell: bash
         run: |
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          mkdir -p "$RUNNER_TEMP/digests"
+          printf '%s\n' "$IMAGE_DIGEST" > "$RUNNER_TEMP/digests/$ARCHITECTURE.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-digest-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/digests/${{ matrix.architecture }}.txt
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  publish:
+    name: Publish version manifest
+    needs: [prepare, build]
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-24.04
+    environment: dockerhub
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: docker-digest-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ vars.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Merge native images and publish version tag
+        env:
+          IMAGE_TAG: ${{ needs.prepare.outputs.tags }}
+        shell: bash
+        run: |
+          amd64_digest=$(cat "$RUNNER_TEMP/digests/amd64.txt")
+          arm64_digest=$(cat "$RUNNER_TEMP/digests/arm64.txt")
+          [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$arm64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          images=("docker.io/erquren/ergent@$amd64_digest" "docker.io/erquren/ergent@$arm64_digest")
+          # Check the assembled platforms before updating the public version tag.
+          docker buildx imagetools create --dry-run "${images[@]}" > "$RUNNER_TEMP/manifest.json"
+          jq -e '[.manifests[].platform | select(.os != "unknown") | (.os + "/" + .architecture)] | sort == ["linux/amd64", "linux/arm64"]' "$RUNNER_TEMP/manifest.json"
+          docker buildx imagetools create --tag "$IMAGE_TAG" "${images[@]}"
+          docker buildx imagetools inspect "$IMAGE_TAG" --format '{{json .Manifest}}' > "$RUNNER_TEMP/published.json"
+          jq -e '[.manifests[].platform | select(.os != "unknown") | (.os + "/" + .architecture)] | sort == ["linux/amd64", "linux/arm64"]' "$RUNNER_TEMP/published.json"
+          image_digest=$(jq -er '.digest' "$RUNNER_TEMP/published.json")
+          [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           {
             echo '### Docker Hub: erquren/ergent'
             echo 'Platforms: linux/amd64, linux/arm64'
             echo '```text'
-            printf '%s\n' "$IMAGE_TAGS"
-            printf 'docker.io/erquren/ergent@%s\n' "$IMAGE_DIGEST"
+            printf '%s\n' "$IMAGE_TAG"
+            printf 'docker.io/erquren/ergent@%s\n' "$image_digest"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

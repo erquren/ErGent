@@ -26,8 +26,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Test smoke-test helpers without Docker
-        run: python -m unittest discover -s scripts/tests -p 'test_docker_smoke.py' -v
+      - name: Test Docker helpers and version tags without Docker
+        run: python -m unittest discover -s scripts/tests -p 'test_docker*.py' -v
       - name: Validate all standalone deployment configurations
         env:
           ERGENT_ORIGIN: https://ergent.example.invalid
@@ -57,9 +57,9 @@ jobs:
         with:
           key: docker-native-agent-${{ matrix.architecture }}
       - name: Build native Agent for actual HTTPS and WSS integration
-        run: cargo build --locked -p ergent-agent
+        run: cargo build --locked -p ergent-client
       - name: Test direct TLS, optional proxy, dev HTTP, and native Agent
         env:
           ARCHITECTURE: ${{ matrix.architecture }}
-        run: python scripts/test-docker.py --image ergent-server:smoke --architecture "$ARCHITECTURE" --agent-binary target/debug/ergent-agent
+        run: python scripts/test-docker.py --image ergent-server:smoke --architecture "$ARCHITECTURE" --agent-binary target/debug/ergent-client
       # No registry login, push, release upload, or secret-bearing artifacts.

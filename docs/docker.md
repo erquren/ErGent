@@ -101,7 +101,7 @@ docker compose pull server
 docker compose up -d --no-build server
 ```
 
-也可使用维护者确认存在的 `erquren/ergent:1.2.0` 或完整提交标签 `erquren/ergent:sha-<完整提交SHA>`，并记录实际摘要。在发布结果尚未确认前，使用上面的本地构建路径；不要把拉取失败误判为用户配置问题。
+也可使用维护者确认存在的版本标签，例如 `erquren/ergent:1.3.0`，并记录实际摘要。在发布结果尚未确认前，使用上面的本地构建路径；不要把拉取失败误判为用户配置问题。
 
 ## 3. 领取初始化码并创建账户
 
@@ -122,8 +122,8 @@ docker compose exec server /app/ergent-server --database /data/server.db setup-c
 下载与 Server/网页相匹配的[原生发布包](https://github.com/erquren/ErGent/releases)，在实际开发机器执行（Windows 使用 `.exe`）：
 
 ```sh
-./ergent-agent enroll --server https://terminal.example.com --name My-PC
-./ergent-agent run
+./ergent-client enroll --server https://terminal.example.com --name My-PC
+./ergent-client run
 ```
 
 网页登录后取得注册令牌；交互终端会隐藏输入，粘贴一次令牌后按 Enter 完成，无需 Ctrl-D/Ctrl-Z。不把令牌写入命令行或日志。Agent 配置、开发文件与 AI CLI 登录信息留在开发机器上。跨机器 Agent 连接必须使用 HTTPS，包括 Tailscale；非默认 HTTPS 端口需写入地址。详见[客户端启动说明](agent.md)。
@@ -141,12 +141,12 @@ openssl x509 -in /srv/ergent/certs/fullchain.pem -noout -ext subjectAltName
 浏览器需通过操作系统/浏览器支持的方式信任该 CA。原生 Agent 也支持显式提供仅含 CA 证书的 PEM 文件：
 
 ```sh
-./ergent-agent --ca-cert /path/to/root-ca.pem \
+./ergent-client --ca-cert /path/to/root-ca.pem \
   enroll --server https://192.168.1.10 --name My-PC
-./ergent-agent run
+./ergent-client run
 ```
 
-`enroll` 将 CA 文件的绝对路径保存为 Agent 配置中的 `caCert`，`run` 自动复用；文件需一直保留且可读。Agent 在启动时构建信任配置，更新 CA 文件后需重启 Agent 才会加载；重启前保存终端中的工作。需要临时覆盖时使用 `./ergent-agent --ca-cert /path/to/other-ca.pem run`，不会重写已保存配置。此信任同时用于 HTTPS 与 WSS，并保留公共/系统根证书校验；缺失、无效或空的 CA 文件会明确报错。只把公共 CA 证书提供给 Agent，**不要复制服务器私钥或 CA 私钥到 Agent**，也不要禁用证书或主机名校验。
+`enroll` 将 CA 文件的绝对路径保存为 Agent 配置中的 `caCert`，`run` 自动复用；文件需一直保留且可读。Agent 在启动时构建信任配置，更新 CA 文件后需重启 Agent 才会加载；重启前保存终端中的工作。需要临时覆盖时使用 `./ergent-client --ca-cert /path/to/other-ca.pem run`，不会重写已保存配置。此信任同时用于 HTTPS 与 WSS，并保留公共/系统根证书校验；缺失、无效或空的 CA 文件会明确报错。只把公共 CA 证书提供给 Agent，**不要复制服务器私钥或 CA 私钥到 Agent**，也不要禁用证书或主机名校验。
 
 ## 健康检查与部署验收
 
@@ -352,9 +352,9 @@ docker compose -f deploy/compose.dev-http.yaml \
 账户创建成功后打开上述本机 HTTP 地址登录；首次 CLI 创建会永久关闭网页首次初始化。原生 Agent 也只在同一主机连接此 loopback HTTP 地址，建议使用独立配置：
 
 ```sh
-./ergent-agent --config .local/dev-agent.json \
+./ergent-client --config .local/dev-agent.json \
   enroll --server http://127.0.0.1:7777 --name Local-Dev
-./ergent-agent --config .local/dev-agent.json run
+./ergent-client --config .local/dev-agent.json run
 ```
 
 自定义 `ERGENT_DEV_PORT` 时同步修改 Agent 地址。注册令牌在交互终端中隐藏输入，按 Enter 完成。该开发入口不允许给远程 Agent 使用；实际部署改用原生 HTTPS 或已有 HTTPS 代理。
@@ -365,26 +365,30 @@ docker compose -f deploy/compose.dev-http.yaml \
 
 目标仓库固定为 [Docker Hub 的 erquren/ergent](https://hub.docker.com/r/erquren/ergent)。在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 配置 `DOCKERHUB_USERNAME`（Variable 或 Secret 均支持，Variable 优先）和 `DOCKERHUB_TOKEN`（Secret，使用对该仓库有写入权限的 Docker Hub 访问令牌）。fork 若需发布到其他镜像仓库，须先修改 workflow 中的镜像地址。
 
-每次上传生成 `docker.io/erquren/ergent:sha-<完整提交SHA>`。在版本标签上运行时，会先检查 Rust、网页及 Git 标签版本一致性；例如 `v1.2.0` 会另外生成 `docker.io/erquren/ergent:1.2.0`。分支运行只生成 SHA 标签，不自动创建 `latest`，不修改 GitHub Release/附件，也没有 tag/release 自动触发入口。
+每次上传使用 `Cargo.toml` 中的项目版本作为镜像标签，并检查网页版本一致。例如项目版本为 `1.3.0`，无论从 `main` 分支还是 `v1.3.0` Git 标签手动运行，都会发布 `docker.io/erquren/ergent:1.3.0`；从 Git 标签运行时，仍要求标签恰好为 `v<项目版本>`。新发布不再生成 `sha-<提交SHA>` 标签，也不自动创建 `latest`。提交 SHA 保存在镜像的 `org.opencontainers.image.revision` 标签中，项目版本保存在 `org.opencontainers.image.version` 中。
 
-发布 1.2.0 的步骤：
+同一项目版本再次发布会更新该 Docker 标签指向的镜像；发布新版本前同步修改 Rust 和网页版本。需要固定部署内容时使用发布摘要中的 digest。此修改不会删除历史 SHA 标签，不修改 GitHub Release/附件，也没有 tag/release 自动触发入口。
 
-1. 提交并推送包含此 workflow 的修改，确保它已进入默认分支，并让 `v1.2.0` 标签指向包含此修改的发布提交；已有标签先核对其指向及 workflow 内容。
-2. 使用已登录 GitHub 的 CLI，在目标版本标签上手动运行：
+验证和正式发布均使用原生架构机器：AMD64 在 `ubuntu-24.04`，ARM64 在 `ubuntu-24.04-arm` 上构建，不使用 QEMU 模拟编译。正式发布先分别按 digest 上传两种架构的镜像，两者成功后再合并为同一个版本标签的多架构镜像索引；任一架构失败都不会进入版本标签合并步骤。工作流串行执行，避免多个发布同时更新标签。
+
+发布 1.3.0 的步骤：
+
+1. 提交并推送包含此 workflow 和 `scripts/docker_tags.py` 的修改，确保所选分支或标签包含这些文件，且 Rust 与网页版本均为 `1.3.0`。旧 Git 标签若不包含本次修改，仍会执行旧发布规则。
+2. 在 GitHub Actions 的 `Docker image (manual)` 中选择目标分支（例如 `main`），勾选 `publish` 后运行。也可使用已登录 GitHub 的 CLI：
 
    ```sh
-   gh workflow run docker-image.yml --ref v1.2.0 -f publish=true
+   gh workflow run docker-image.yml --ref main -f publish=true
    ```
 
-3. 查看 GitHub Actions 中的 `Docker image (manual)`。双架构 `Docker validation` 全部通过后才会登录 Docker Hub，构建并上传 `linux/amd64` 和 `linux/arm64`。运行摘要会列出镜像标签和摘要。
+3. 查看 GitHub Actions 中的 `Docker image (manual)`。双架构 `Docker validation` 全部通过后，两台原生机器分别构建并上传 `linux/amd64` 和 `linux/arm64`。最后的 `Publish version manifest` 合并并检查两种架构，运行摘要列出版本标签和镜像索引摘要。
 4. 发布成功后验证镜像索引并拉取：
 
    ```sh
-   docker buildx imagetools inspect erquren/ergent:1.2.0
-   docker pull erquren/ergent:1.2.0
+   docker buildx imagetools inspect erquren/ergent:1.3.0
+   docker pull erquren/ergent:1.3.0
    ```
 
-镜像索引应包含 `linux/amd64` 和 `linux/arm64`；Docker 会按运行机器的架构选择镜像。部署时可设置 `ERGENT_IMAGE=erquren/ergent:1.2.0`，推荐记录并使用运行摘要中实际发布的 digest。仅推送版本标签或公开 GitHub Release 不会上传 Docker 镜像。
+镜像索引应包含 `linux/amd64` 和 `linux/arm64`；Docker 会按运行机器的架构选择镜像。部署时可设置 `ERGENT_IMAGE=erquren/ergent:1.3.0`，推荐记录并使用运行摘要中实际发布的 digest。仅推送版本标签或公开 GitHub Release 不会上传 Docker 镜像。
 
 ## 常见问题
 

@@ -17,7 +17,7 @@ const root = process.cwd(),
 const folder = mkdtempSync(join(tmpdir(), "ergent-e2e-"));
 const suffix = process.platform === "win32" ? ".exe" : "";
 const serverBin = resolve(root, `target/debug/ergent-server${suffix}`),
-  agentBin = resolve(root, `target/debug/ergent-agent${suffix}`);
+  agentBin = resolve(root, `target/debug/ergent-client${suffix}`);
 const database = join(folder, "server.db"),
   config = join(folder, "agent.json");
 const password = "ergent-e2e-password-only";

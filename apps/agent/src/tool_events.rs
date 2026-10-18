@@ -257,7 +257,7 @@ pub fn setup_codex() -> Result<()> {
     let temporary = home.join(format!(".ergent-hooks-{}.tmp", Uuid::new_v4()));
     write_private(&temporary, &data)?;
     std::fs::rename(&temporary, &path)?;
-    println!("已写入 {}。在 Codex /hooks 中审阅并信任新增 hooks，然后在 Ergent 新终端中运行 ergent-agent codex。",path.display());
+    println!("已写入 {}。在 Codex /hooks 中审阅并信任新增 hooks，然后在 Ergent 新终端中运行 ergent-client codex。",path.display());
     Ok(())
 }
 
