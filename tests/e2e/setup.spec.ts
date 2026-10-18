@@ -226,7 +226,7 @@ for (const serverOrigin of [
       await submit.click();
       await expect(
         page.getByRole("heading", {
-          name: language === "en" ? "Open your workspace" : "进入你的工作台",
+          name: language === "en" ? "Sign in" : "登录",
         }),
       ).toBeVisible();
       expect(state.setupPosts).toHaveLength(1);
@@ -266,7 +266,7 @@ for (const failure of [
     await page.getByRole("button", { name: "重试连接" }).click();
     await expect(
       page.getByRole("heading", {
-        name: state.required ? "创建首个账户" : "进入你的工作台",
+        name: state.required ? "创建首个账户" : "登录",
       }),
     ).toBeVisible();
   });
@@ -277,9 +277,7 @@ test("existing-account login remains available and restores authenticated sessio
   const state = await mockServer(page);
   state.required = false;
   await page.goto(origin);
-  await expect(
-    page.getByRole("heading", { name: "进入你的工作台" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "登录" })).toBeVisible();
   await expect(page.getByLabel("密码", { exact: true })).toHaveAttribute(
     "autocomplete",
     "current-password",
@@ -289,9 +287,7 @@ test("existing-account login remains available and restores authenticated sessio
   await expect(page.locator(".setup-security")).toHaveCount(0);
   state.meStatus = 200;
   await page.reload();
-  await expect(
-    page.getByRole("heading", { name: "所有设备，一个工作台。" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "设备与终端" })).toBeVisible();
 });
 
 test("setup masks secrets, confirms the password, submits once, then clears secrets before login", async ({
@@ -341,9 +337,7 @@ test("setup masks secrets, confirms the password, submits once, then clears secr
   });
   await expect.poll(() => state.setupPosts.length).toBe(1);
   release();
-  await expect(
-    page.getByRole("heading", { name: "进入你的工作台" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "登录" })).toBeVisible();
   await expect(page.getByRole("status")).toHaveText(
     "首个账户已创建。请使用刚设置的密码登录。",
   );
@@ -375,10 +369,8 @@ test("setup masks secrets, confirms the password, submits once, then clears secr
     ),
   ).toBeTruthy();
   await page.getByLabel("密码", { exact: true }).fill(password);
-  await page.getByRole("button", { name: "连接工作台" }).click();
-  await expect(
-    page.getByRole("heading", { name: "所有设备，一个工作台。" }),
-  ).toBeVisible();
+  await page.getByRole("button", { name: "登录" }).click();
+  await expect(page.getByRole("heading", { name: "设备与终端" })).toBeVisible();
   expect(state.loginPosts).toEqual([{ username: "first-user", password }]);
 });
 
@@ -397,9 +389,7 @@ test("setup errors remain retryable and a completed setup in another tab switche
   state.completeOnFailure = true;
   state.postStatus = 409;
   await page.getByRole("button", { name: "创建账户", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "进入你的工作台" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "登录" })).toBeVisible();
   await expect(page.getByRole("status")).toHaveText(
     "初始化已完成。请使用已创建的账户登录。",
   );

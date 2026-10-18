@@ -149,10 +149,8 @@ test("real terminals, card switching, browser refresh, server restart, and write
   await page.goto(origin);
   await page.getByLabel("用户名").fill("admin");
   await page.getByLabel("密码").fill(password);
-  await page.getByRole("button", { name: "连接工作台" }).click();
-  await expect(
-    page.getByRole("heading", { name: "所有设备，一个工作台。" }),
-  ).toBeVisible();
+  await page.getByRole("button", { name: "登录" }).click();
+  await expect(page.getByRole("heading", { name: "设备与终端" })).toBeVisible();
   await page.screenshot({ path: "test-results/workspace-overview.png" });
   await page.getByRole("button", { name: "在 Test Mac 新建终端" }).click();
   await page.getByLabel("终端名称").fill("Build terminal");
@@ -669,7 +667,7 @@ test("rename persists across reconnect and exited terminals disappear", async ({
       ).toBeDisabled();
       await page.getByRole("button", { name: "关闭已结束的终端视图" }).click();
       await expect(
-        page.getByRole("heading", { name: "所有设备，一个工作台。" }),
+        page.getByRole("heading", { name: "设备与终端" }),
       ).toBeVisible();
       await expect(
         observer.locator(".session-card").filter({ hasText: title }),
@@ -950,7 +948,7 @@ test("language follows the device, persists across tabs, and keeps the terminal 
     await expect(page.locator("html")).toHaveAttribute("lang", expected);
     await expect(
       page.getByRole("button", {
-        name: expected === "en" ? "Sign in" : "连接工作台",
+        name: expected === "en" ? "Sign in" : "登录",
         exact: true,
       }),
     ).toBeVisible();
@@ -988,7 +986,7 @@ test("language follows the device, persists across tabs, and keeps the terminal 
     await page.goto(origin);
     await observer.goto(origin);
     await expect(
-      page.getByRole("heading", { name: "Every device. One workspace." }),
+      page.getByRole("heading", { name: "Devices and terminals" }),
     ).toBeVisible();
     expect(await page.locator(".main").innerText()).not.toMatch(
       /[\u3400-\u9fff]/,
