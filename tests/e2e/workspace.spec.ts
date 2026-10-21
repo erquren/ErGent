@@ -521,6 +521,7 @@ test("mobile layout, terminal shortcuts and compact viewport", async ({
     await page.getByRole("button", { name: "方向↑", exact: true }).tap();
     await expect.poll(() => inputs).toEqual(["\x03", "\x0c", "\x1b[A"]);
     await expect(page.locator(".primary-keys button")).toHaveText([
+      "键盘",
       "Ctrl",
       "Ctrl+C",
       "Esc",
@@ -531,9 +532,11 @@ test("mobile layout, terminal shortcuts and compact viewport", async ({
     await expect(
       page.getByRole("button", { name: "Ctrl+D", exact: true }),
     ).toBeHidden();
-    await page.getByRole("button", { name: "更多快捷键", exact: true }).tap();
+    await page.locator(".xterm-screen").tap();
+    await expect(page.locator(".xterm-helper-textarea")).not.toBeFocused();
     await page.getByRole("button", { name: "键盘", exact: true }).tap();
     await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
+    await page.getByRole("button", { name: "更多快捷键", exact: true }).tap();
     await page.keyboard.type("garbage");
     await page.getByRole("button", { name: "Ctrl+U", exact: true }).tap();
     // cmd uses Escape to clear a line; Ctrl+U is a Unix shell binding.
@@ -545,6 +548,106 @@ test("mobile layout, terminal shortcuts and compact viewport", async ({
     await expect(page.locator(".xterm-rows")).toContainText("MOBILE_OK");
     await page.getByRole("button", { name: "收起快捷键", exact: true }).tap();
     await expect(page.locator(".extra-keys")).toBeHidden();
+    await expect(
+      page.getByRole("button", { name: "Ctrl+C", exact: true }),
+    ).toBeEnabled();
+    await page.keyboard.type(
+      process.platform === "win32"
+        ? "for /L %i in (1,1,100) do @echo HISTORY_%i\r"
+        : "seq 1 100 | sed 's/^/HISTORY_/'\r",
+    );
+    await expect(page.locator(".xterm-rows")).toContainText("HISTORY_100");
+    const viewportElement = page.locator(".xterm-viewport");
+    const bottom = await viewportElement.evaluate((el) => el.scrollTop);
+    expect(bottom).toBeGreaterThan(0);
+    const screen = (await page.locator(".xterm-screen").boundingBox())!;
+    const cdp = await context.newCDPSession(page);
+    const x = screen.x + screen.width / 2;
+    const y = screen.y + 40;
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x, y }],
+    });
+    for (let delta = 20; delta <= 160; delta += 20) {
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ x, y: y + delta }],
+      });
+    }
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+    });
+    await expect
+      .poll(() => viewportElement.evaluate((el) => el.scrollTop))
+      .toBeLessThan(bottom);
+    await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x, y: y + 160 }],
+    });
+    for (let delta = 140; delta >= 0; delta -= 20) {
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ x, y: y + delta }],
+      });
+    }
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+    });
+    await expect
+      .poll(() => viewportElement.evaluate((el) => el.scrollTop))
+      .toBe(bottom);
+    await cdp.detach();
+    await page.getByRole("button", { name: "复制终端内容", exact: true }).tap();
+    const copyDialog = page.getByRole("dialog", { name: "复制终端内容" });
+    const copyText = copyDialog.getByRole("textbox", { name: "待复制文本" });
+    await expect(copyText).toHaveAttribute("readonly", "");
+    await expect(copyText).not.toBeFocused();
+    await expect(copyText).toHaveValue(/HISTORY_100/);
+    await copyDialog.getByRole("button", { name: "已有滚动记录" }).tap();
+    await expect(copyText).toHaveValue(/HISTORY_1\r?\n/);
+    // Exercise the insecure-context fallback with the textarea inside the modal.
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: undefined,
+      });
+      document.execCommand = (command) => {
+        const field = document.activeElement as HTMLTextAreaElement;
+        if (command !== "copy" || !field.closest("dialog[open]")) return false;
+        document.body.dataset.copiedText = field.value.slice(
+          field.selectionStart,
+          field.selectionEnd,
+        );
+        return true;
+      };
+    });
+    await copyText.evaluate((element: HTMLTextAreaElement) => {
+      element.focus();
+      element.setSelectionRange(0, 12);
+      element.dispatchEvent(new Event("select"));
+    });
+    await copyDialog.getByRole("button", { name: "复制选中文字" }).tap();
+    await expect(copyDialog.getByRole("status")).toHaveText("已复制");
+    expect(await page.evaluate(() => document.body.dataset.copiedText)).toBe(
+      (await copyText.inputValue()).slice(0, 12),
+    );
+    await copyDialog
+      .getByRole("button", { name: "当前画面", exact: true })
+      .tap();
+    await copyDialog.getByRole("button", { name: "复制全部文本" }).tap();
+    await expect(copyDialog.getByRole("status")).toHaveText("已复制");
+    expect(await page.evaluate(() => document.body.dataset.copiedText)).toBe(
+      await copyText.inputValue(),
+    );
+    await copyDialog.getByRole("button", { name: "关闭复制面板" }).tap();
+    await expect(page.locator(".xterm-helper-textarea")).not.toBeFocused();
+    await expect(
+      page.getByRole("button", { name: "键盘", exact: true }),
+    ).toBeEnabled();
+    await page.getByRole("button", { name: "键盘", exact: true }).tap();
     for (const viewport of [
       { width: 390, height: 400 },
       { width: 844, height: 390 },
@@ -580,6 +683,12 @@ test("mobile layout, terminal shortcuts and compact viewport", async ({
     await expect(page.locator(".page-heading h1")).toBeVisible();
     await expect(page.locator(".page-heading p")).toHaveCount(0);
     await expect(page.locator(".terminal-toolbar")).toBeVisible();
+    await page.locator(".desktop-nav-toggle").click();
+    await expect(page.locator(".sidebar")).toBeHidden();
+    await page
+      .getByRole("button", { name: "展开设备列表", exact: true })
+      .click();
+    await expect(page.locator(".sidebar")).toBeVisible();
     await page.screenshot({ path: "test-results/mobile-terminal-desktop.png" });
   } finally {
     await context.close();

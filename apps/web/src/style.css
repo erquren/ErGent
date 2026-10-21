@@ -1759,3 +1759,38 @@ button:hover {
 .setup-security li + li {
   margin-top: 5px;
 }
+
+/* Keep navigation controls available after collapsing the device list. */
+.sidebar-close {
+  margin-left: auto;
+  padding: 7px;
+  flex-shrink: 0;
+}
+.desktop-nav-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+@media (min-width: 761px) {
+  .sidebar-collapsed .sidebar {
+    display: none;
+  }
+}
+.terminal-host {
+  touch-action: pan-x pinch-zoom;
+}
+@media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
+  .desktop-nav-toggle {
+    display: none;
+  }
+  .sidebar-collapsed .sidebar {
+    display: flex;
+  }
+  .app:has(.xterm-helper-textarea:focus) .terminal-heading,
+  .app:has(.xterm-helper-textarea:focus) .terminal-palette,
+  .app:has(.xterm-helper-textarea:focus) .tool-summary {
+    display: none;
+  }
+  .terminal-keys .primary-keys button {
+    min-width: 0;
+  }
+}

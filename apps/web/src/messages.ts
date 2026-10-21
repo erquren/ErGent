@@ -1,5 +1,25 @@
 // Canonical UI copy → English. Product names and terminal output are never translated.
 export const english: Record<string, string> = {
+  复制终端内容: "Copy terminal content",
+  关闭复制面板: "Close copy panel",
+  复制范围: "Copy range",
+  当前画面: "Current view",
+  已有滚动记录: "Retained history",
+  终端选中文字: "Terminal selection",
+  待复制文本: "Text to copy",
+  全选: "Select all",
+  复制选中文字: "Copy selected text",
+  复制全部文本: "Copy all text",
+  "请长按选中的文字，使用系统菜单复制。":
+    "Long-press the selected text and copy using the system menu.",
+  "全屏应用（如 Codex）仅提供当前画面，已被覆盖的内容不在此处。":
+    "Full-screen apps (such as Codex) provide only the current screen. Overwritten content is not available here.",
+  "仅包含终端当前保留的记录，不包含已清除或丢失的历史。":
+    "Includes only records currently retained by the terminal, not cleared or lost history.",
+  "内容已固定，可长按选字，不会随新输出移动。":
+    "This text is frozen. Long-press to select without new output moving it.",
+  收起设备列表: "Collapse device list",
+  展开设备列表: "Expand device list",
   "查看 {name} 的终端": "View terminals on {name}",
   查看终端: "View terminals",
   关闭终端列表: "Close terminal list",
