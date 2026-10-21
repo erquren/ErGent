@@ -415,6 +415,7 @@ for (const mobile of [false, true]) {
         await expect(page.getByText("已连接 · 输入在设备上执行")).toBeVisible();
         const marker = `FIT_BOTTOM_${index}`;
         await page.locator(".xterm-helper-textarea").focus();
+        await expect(page.getByText("已连接 · 输入在设备上执行")).toBeVisible();
         // CUP clamps to the last row. Keep the prompt and cursor there too.
         await page.keyboard.type(`printf '\\033[999;1H${marker}'\n`);
         try {

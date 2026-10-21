@@ -1,6 +1,6 @@
 import { t, useLanguage } from "./i18n";
 import { TerminalConnection } from "./terminal-connection";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { ChevronDown, MoreHorizontal } from "lucide-react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -41,6 +41,7 @@ export function TerminalView({
   const extraKeysId = useId();
   const ctrlRef = useRef(false);
   const terminal = useRef<Terminal | null>(null);
+  const resizeTerminal = useRef<() => void>(() => {});
   const sendInput = useRef<(data: string) => void>(() => {});
   const setControl = (value: boolean) => {
     ctrlRef.current = value;
@@ -108,8 +109,16 @@ export function TerminalView({
       if (event.cancelable) event.preventDefault();
       event.stopPropagation();
     };
-    const focused = () => setKeyboardOpen(true);
-    const blurred = () => setKeyboardOpen(false);
+    const focused = () => {
+      setKeyboardOpen(true);
+      // :focus changes the mobile header immediately. Gate input before the
+      // next keystroke, rather than waiting for an asynchronous ResizeObserver.
+      resize();
+    };
+    const blurred = () => {
+      setKeyboardOpen(false);
+      resize();
+    };
     host.addEventListener("touchstart", touchStart, {
       capture: true,
       passive: true,
@@ -147,6 +156,7 @@ export function TerminalView({
       transport.resize(cols, rows);
       setDimensions(`${cols} × ${rows}`);
     };
+    resizeTerminal.current = resize;
     const transport = new TerminalConnection(
       session.id,
       term,
@@ -196,9 +206,13 @@ export function TerminalView({
       sendInput.current = () => {};
       claim.current = () => {};
       terminal.current = null;
+      resizeTerminal.current = () => {};
       term.dispose();
     };
   }, [session.id]);
+  useLayoutEffect(() => {
+    resizeTerminal.current();
+  }, [moreKeys]);
   useEffect(() => {
     connection.current?.connect(socket);
   }, [session.id, socket]);
