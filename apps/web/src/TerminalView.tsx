@@ -373,12 +373,14 @@ export function TerminalView({
           <button
             className="terminal-copy-trigger"
             aria-label={t("复制终端内容")}
-            onClick={() => {
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={(event) => {
               const term = terminal.current;
               if (!term) return;
               // Capture before blur/keyboard dismissal can resize the terminal.
               setCopySnapshot(captureTerminalText(term));
               term.blur();
+              event.currentTarget.focus();
               setControl(false);
               setMoreKeys(false);
             }}
