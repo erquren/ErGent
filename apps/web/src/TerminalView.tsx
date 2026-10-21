@@ -1,9 +1,14 @@
 import { t, useLanguage } from "./i18n";
 import { TerminalConnection } from "./terminal-connection";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { ChevronDown, MoreHorizontal } from "lucide-react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { TerminalCopyDialog } from "./TerminalCopyDialog";
+import {
+  captureTerminalText,
+  type TerminalTextSnapshot,
+} from "./terminal-text";
 import type { SessionInfo } from "../../../packages/protocol-ts";
 import "@xterm/xterm/css/xterm.css";
 
@@ -29,9 +34,14 @@ export function TerminalView({
   const [historyLost, setHistoryLost] = useState(false);
   const [ctrl, setCtrl] = useState(false);
   const [moreKeys, setMoreKeys] = useState(false);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const [copySnapshot, setCopySnapshot] = useState<TerminalTextSnapshot | null>(
+    null,
+  );
   const extraKeysId = useId();
   const ctrlRef = useRef(false);
   const terminal = useRef<Terminal | null>(null);
+  const resizeTerminal = useRef<() => void>(() => {});
   const sendInput = useRef<(data: string) => void>(() => {});
   const setControl = (value: boolean) => {
     ctrlRef.current = value;
@@ -51,6 +61,7 @@ export function TerminalView({
     setWritable(false);
     setControl(false);
     setHistoryLost(false);
+    setCopySnapshot(null);
     if (!container.current) return;
     const term = new Terminal({
       cursorBlink: true,
@@ -65,6 +76,64 @@ export function TerminalView({
     term.loadAddon(fit);
     term.open(container.current);
     terminal.current = term;
+    setKeyboardOpen(false);
+    const host = container.current;
+    // Own touch scrolling so terminal mouse reporting cannot swallow gestures.
+    let touchY: number | null = null;
+    let remainder = 0;
+    const touchStart = (event: TouchEvent) => {
+      touchY = event.touches.length === 1 ? event.touches[0].clientY : null;
+      remainder = 0;
+      event.stopPropagation();
+    };
+    const touchMove = (event: TouchEvent) => {
+      if (touchY === null || event.touches.length !== 1) return;
+      const y = event.touches[0].clientY;
+      const rowHeight = host
+        .querySelector(".xterm-screen")
+        ?.getBoundingClientRect().height;
+      const lineHeight = rowHeight ? rowHeight / term.rows : 18;
+      remainder += touchY - y;
+      touchY = y;
+      const lines = Math.trunc(remainder / lineHeight);
+      if (lines) {
+        term.scrollLines(lines);
+        remainder -= lines * lineHeight;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const touchEnd = (event: TouchEvent) => {
+      touchY = null;
+      // Suppress compatibility mouse events which would focus the textarea.
+      if (event.cancelable) event.preventDefault();
+      event.stopPropagation();
+    };
+    const focused = () => {
+      setKeyboardOpen(true);
+      // :focus changes the mobile header immediately. Gate input before the
+      // next keystroke, rather than waiting for an asynchronous ResizeObserver.
+      resize();
+    };
+    const blurred = () => {
+      setKeyboardOpen(false);
+      resize();
+    };
+    host.addEventListener("touchstart", touchStart, {
+      capture: true,
+      passive: true,
+    });
+    host.addEventListener("touchmove", touchMove, {
+      capture: true,
+      passive: false,
+    });
+    host.addEventListener("touchend", touchEnd, {
+      capture: true,
+      passive: false,
+    });
+    host.addEventListener("touchcancel", touchEnd, true);
+    term.textarea?.addEventListener("focus", focused);
+    term.textarea?.addEventListener("blur", blurred);
     const inputWritable = (value: boolean) => {
       // Match the renderer's native input state to the transport gate. During
       // recovery/read-only leases, keystrokes must not appear to be accepted or
@@ -87,6 +156,7 @@ export function TerminalView({
       transport.resize(cols, rows);
       setDimensions(`${cols} × ${rows}`);
     };
+    resizeTerminal.current = resize;
     const transport = new TerminalConnection(
       session.id,
       term,
@@ -123,6 +193,12 @@ export function TerminalView({
     });
     claim.current = () => transport.claim();
     return () => {
+      host.removeEventListener("touchstart", touchStart, true);
+      host.removeEventListener("touchmove", touchMove, true);
+      host.removeEventListener("touchend", touchEnd, true);
+      host.removeEventListener("touchcancel", touchEnd, true);
+      term.textarea?.removeEventListener("focus", focused);
+      term.textarea?.removeEventListener("blur", blurred);
       transport.dispose();
       observer.disconnect();
       input.dispose();
@@ -130,9 +206,13 @@ export function TerminalView({
       sendInput.current = () => {};
       claim.current = () => {};
       terminal.current = null;
+      resizeTerminal.current = () => {};
       term.dispose();
     };
   }, [session.id]);
+  useLayoutEffect(() => {
+    resizeTerminal.current();
+  }, [moreKeys]);
   useEffect(() => {
     connection.current?.connect(socket);
   }, [session.id, socket]);
@@ -149,6 +229,19 @@ export function TerminalView({
       </div>
       <div className="terminal-keys" aria-label={t("终端快捷键")}>
         <div className="key-row primary-keys">
+          <button
+            disabled={!keyboardOpen && (!writable || !running)}
+            aria-label={t(keyboardOpen ? "收起键盘" : "键盘")}
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={() => {
+              setMoreKeys(false);
+              setControl(false);
+              if (keyboardOpen) terminal.current?.blur();
+              else terminal.current?.focus();
+            }}
+          >
+            {t(keyboardOpen ? "收起键盘" : "键盘")}
+          </button>
           <button
             disabled={!writable || !running}
             aria-pressed={ctrl}
@@ -205,15 +298,6 @@ export function TerminalView({
               onClick={() => shortcut("\x04")}
             >
               Ctrl+D
-            </button>
-            <button
-              disabled={!writable || !running}
-              onClick={() => terminal.current?.focus()}
-            >
-              {t("键盘")}
-            </button>
-            <button onClick={() => terminal.current?.blur()}>
-              {t("收起键盘")}
             </button>
           </div>
           <div className="key-row">
@@ -286,11 +370,34 @@ export function TerminalView({
             </span>
           )}
           {dimensions}
+          <button
+            className="terminal-copy-trigger"
+            aria-label={t("复制终端内容")}
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={(event) => {
+              const term = terminal.current;
+              if (!term) return;
+              // Capture before blur/keyboard dismissal can resize the terminal.
+              setCopySnapshot(captureTerminalText(term));
+              term.blur();
+              event.currentTarget.focus();
+              setControl(false);
+              setMoreKeys(false);
+            }}
+          >
+            {t("复制")}
+          </button>
           {!writable && socket && session.lifecycle === "running" && (
             <button onClick={() => claim.current()}>{t("接管终端")}</button>
           )}
         </span>
       </div>
+      {copySnapshot && (
+        <TerminalCopyDialog
+          snapshot={copySnapshot}
+          onClose={() => setCopySnapshot(null)}
+        />
+      )}
     </div>
   );
 }

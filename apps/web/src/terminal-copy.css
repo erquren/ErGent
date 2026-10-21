@@ -1,0 +1,78 @@
+.terminal-copy-dialog {
+  margin: auto;
+  width: min(720px, calc(100vw - 24px));
+  height: min(740px, calc(var(--viewport-height, 100dvh) - 24px));
+  max-height: calc(var(--viewport-height, 100dvh) - 24px);
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  color: var(--text);
+  background: var(--surface);
+}
+.terminal-copy-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.terminal-copy-dialog header,
+.terminal-copy-dialog footer,
+.terminal-copy-scopes {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.terminal-copy-dialog header {
+  justify-content: space-between;
+}
+.terminal-copy-dialog h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.terminal-copy-dialog button {
+  min-height: 44px;
+}
+.terminal-copy-dialog header button {
+  min-width: 44px;
+}
+.terminal-copy-dialog p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.terminal-copy-scopes button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.terminal-copy-dialog textarea {
+  flex: 1;
+  min-height: 80px;
+  width: 100%;
+  resize: none;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font:
+    16px/1.5 "SFMono-Regular",
+    Consolas,
+    monospace;
+  white-space: pre-wrap;
+  user-select: text;
+  -webkit-user-select: text;
+  touch-action: auto;
+}
+.terminal-copy-dialog footer span {
+  font-size: 12px;
+  width: 100%;
+}
+.terminal-status .terminal-copy-trigger {
+  min-width: 44px;
+  min-height: 28px;
+  font-size: 11px;
+}

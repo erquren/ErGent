@@ -20,6 +20,8 @@ import {
   Check,
   Languages,
   Settings2,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import type {
   Event,
@@ -123,6 +125,7 @@ function App() {
     </GlassPopover>
   );
   const [navOpen, setNavOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [managerOpen, setManagerOpen] = useState(false);
   const [terminalListMachineId, setTerminalListMachineId] = useState<
     string | null
@@ -539,7 +542,9 @@ function App() {
       />
     );
   return (
-    <div className={`app ${navOpen ? "nav-open" : ""}`}>
+    <div
+      className={`app ${navOpen ? "nav-open" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
+    >
       {navOpen && (
         <button
           className="nav-backdrop"
@@ -559,6 +564,17 @@ function App() {
             src="/branding/wordmark.png"
             alt="ErGent"
           />
+          <button
+            className="sidebar-close"
+            aria-label={t("收起设备列表")}
+            title={t("收起设备列表")}
+            onClick={() => {
+              setSidebarCollapsed(true);
+              setNavOpen(false);
+            }}
+          >
+            <PanelLeftClose size={18} />
+          </button>
         </div>
         <div className="section-heading">
           <span>{t("MACHINES")}</span>
@@ -711,6 +727,20 @@ function App() {
       </aside>
       <main className="main">
         <header className="topbar">
+          <button
+            className="desktop-nav-toggle"
+            aria-label={t(sidebarCollapsed ? "展开设备列表" : "收起设备列表")}
+            title={t(sidebarCollapsed ? "展开设备列表" : "收起设备列表")}
+            aria-expanded={!sidebarCollapsed}
+            aria-controls="machine-navigation"
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+          >
+            {sidebarCollapsed ? (
+              <PanelLeftOpen size={18} />
+            ) : (
+              <PanelLeftClose size={18} />
+            )}
+          </button>
           <button
             className="mobile-nav-toggle"
             aria-expanded={navOpen}

@@ -224,7 +224,15 @@ The web UI checks authentication about 1.5 seconds after disconnection. If the S
 发布包不含密码、令牌、数据库、AI CLI 或开发环境。
 manifest.json 记录版本、Git commit、工作区是否有未提交修改及文件校验值；外部 .sha256 校验压缩包。
 
-### 升级到 1.3.0 / Upgrade to 1.3.0
+### 升级到 1.4.0 / Upgrade to 1.4.0
+
+本版改进手机触摸滚动、显式键盘开关和输入布局，支持设备列表收起/展开。终端底部“复制”打开固定的只读文本，可选择片段或复制全部，保留代码缩进；普通输出可复制保留的滚动记录，Codex 等全屏应用仅提供当前画面，不包含被覆盖的历史对话。
+This release improves mobile scrolling, explicit keyboard controls, compact input layout and collapsible device navigation. The terminal copy panel freezes selectable plain text and preserves code indentation. Normal output exposes retained scrollback; full-screen apps such as Codex expose only the current screen, not overwritten conversation history.
+
+从 1.3.0 升级保留数据库和客户端配置，无需重新注册；没有新增数据库迁移，协议仍为 `ergent.preview.v3`。替换网页后刷新浏览器；重启客户端前保存终端中的工作。Docker 版本标签为 `erquren/ergent:1.4.0`，支持 Linux amd64 / arm64。
+Keep the database and client configuration when upgrading from 1.3.0. No new migration or protocol change is required. Refresh the browser after replacing the web UI and save terminal work before restarting clients. Docker tag: `erquren/ergent:1.4.0` for Linux amd64 / arm64.
+
+### 升级到 1.3.0（历史说明） / Upgrade to 1.3.0 (historical)
 
 本版新增设备管理、设备移除、终端展开/收起及首页设备终端列表。客户端由 `ergent-agent` 更名为 `ergent-client`（Windows 使用 `.exe`），服务端仍为 `ergent-server`；更新后台服务及脚本中的程序路径。已有 `.local/agent.json` 或自定义 `--config` 配置继续有效，无需重新注册。之前安装过 Codex hooks 时，请移除指向旧程序的 ErGent hook，再执行 `ergent-client setup-codex` 并在 `/hooks` 中确认信任。
 This release adds device management, device removal, collapsible terminal lists and terminal browsing from overview cards. The client executable is renamed from `ergent-agent` to `ergent-client` (`.exe` on Windows); the server remains `ergent-server`. Update service and script paths. Existing client configurations remain valid without re-enrollment. If Codex hooks reference the old executable, remove those ErGent hooks, run `ergent-client setup-codex`, and review trust in `/hooks`.
