@@ -12,19 +12,26 @@ ErGent 是一个浏览器里的个人开发工作台，用于集中访问多台�
 
 A personal development workspace in your browser, with native Agents exposing real shell terminals across your devices.
 
-**当前版本：v1.4.0** · [下载发布包](https://github.com/erquren/ErGent/releases/tag/v1.4.0) · [Docker Hub](https://hub.docker.com/r/erquren/ergent)
+**当前版本：v1.5.0** · [下载发布包](https://github.com/erquren/ErGent/releases/tag/v1.5.0) · [Docker Hub](https://hub.docker.com/r/erquren/ergent)
 
 原生包支持 Windows、Linux、macOS 的 x86_64 / ARM64；Docker 镜像支持 Linux amd64 / arm64，具体标签以实际发布结果为准。
 
-## v1.4.0：手机终端操作与复制
+## v1.5.0：终端翻页与弹窗交互
+
+- 触控设备增加“上一页 / 下一页 / 回到最新”：普通终端翻看本地保留的记录，全屏应用发送 PageUp、PageDown、End；翻页不会自动打开键盘。
+- Ctrl、Ctrl+C 和 Tab 收入“更多”，主要快捷键保持同一行；桌面鼠标设备隐藏触控快捷键栏。
+- 收紧顶部栏和终端标题区，增加可用终端显示空间。
+- 统一修复 8 类模态弹窗的误关闭：点击外部或从内部拖到外部松开都不会关闭，使用弹窗内按钮或 Esc 退出。
+
+Docker 版本标签为 `erquren/ergent:1.5.0`，不自动提供 `latest`。部署、升级和终端历史边界见下方文档。
+
+## v1.4.0：手机终端操作与复制（历史说明）
 
 - 手机端上下滑动浏览终端记录，点击终端不自动弹出输入法；使用常驻的“键盘 / 收起键盘”按钮控制输入，输入时收起顶部操作区以腾出显示空间。
 - 手机和桌面均支持手动收起、展开左侧设备列表。
 - 点击终端底部“复制”，在固定的文本面板中长按选取片段或复制全部；普通输出支持“当前画面”和“已有滚动记录”，保留代码缩进并合并终端自动折行。
 - Codex 等应用使用全屏模式时，仅能复制当前画面；已覆盖、清除或丢失的内容不在复制范围内，也不代表完整 AI 对话记录。普通终端最多保留 2,000 行滚动历史，尺寸变化或重新同步可能重置历史。
 - 支持局域网 / Tailscale HTTP 下的复制回退；浏览器拒绝一键复制时，可使用手机系统的选字复制菜单。
-
-Docker 版本标签为 `erquren/ergent:1.4.0`，不自动提供 `latest`。部署、升级和终端历史边界见下方文档。
 
 ## 使用文档
 

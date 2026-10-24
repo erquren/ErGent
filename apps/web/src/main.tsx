@@ -806,7 +806,10 @@ function App() {
                 <div className="page-actions">
                   {active.lifecycle !== "running" &&
                     active.lifecycle !== "terminating" && (
-                      <button onClick={() => setSelected(null)}>
+                      <button
+                        className="terminal-dismiss"
+                        onClick={() => setSelected(null)}
+                      >
                         {t("关闭已结束的终端视图")}
                       </button>
                     )}

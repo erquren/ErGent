@@ -1,5 +1,10 @@
 // Canonical UI copy → English. Product names and terminal output are never translated.
 export const english: Record<string, string> = {
+  终端翻页: "Terminal navigation",
+  上一页: "Previous page",
+  下一页: "Next page",
+  回到最新: "Back to latest",
+  "向当前应用发送 {key}": "Send {key} to the current app",
   复制终端内容: "Copy terminal content",
   关闭复制面板: "Close copy panel",
   复制范围: "Copy range",

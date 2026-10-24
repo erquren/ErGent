@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { resolve, sep } from "node:path";
 import type { MachineInfo, SessionInfo } from "../../packages/protocol-ts";
 
@@ -134,6 +134,110 @@ async function mockServer(page: Page) {
 async function openManager(page: Page) {
   await page.getByRole("button", { name: "设备管理", exact: true }).click();
   return page.getByRole("dialog", { name: "设备管理", exact: true });
+}
+
+async function expectOutsideInteractionsToKeepOpen(
+  page: Page,
+  dialog: Locator,
+) {
+  await expect(dialog).toBeVisible();
+  const bounds = (await dialog.boundingBox())!;
+  const outside = { x: 4, y: 4 };
+  expect(bounds.x > outside.x || bounds.y > outside.y).toBe(true);
+
+  // Dragging a text selection beyond the dialog must not discard its contents.
+  const field = dialog.locator("input, textarea").first();
+  const start = (await (
+    (await field.count()) ? field : dialog.getByRole("heading").first()
+  ).boundingBox())!;
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(outside.x, outside.y, { steps: 5 });
+  await page.mouse.up();
+  await expect(dialog).toBeVisible();
+
+  await page.mouse.click(outside.x, outside.y);
+  await expect(dialog).toBeVisible();
+}
+
+for (const kind of [
+  "terminal-rename",
+  "create",
+  "device-rename",
+  "remove",
+  "enroll",
+  "manager",
+  "terminals",
+  "copy",
+] as const) {
+  test(`${kind} dialog survives outside clicks and drag release`, async ({
+    page,
+  }) => {
+    await mockServer(page);
+    let dialog: Locator;
+    if (kind === "terminal-rename" || kind === "copy") {
+      await page.locator(".session-card").click();
+      const name = kind === "copy" ? "复制终端内容" : "重命名终端";
+      await page.getByRole("button", { name, exact: true }).click();
+      dialog = page.getByRole("dialog", { name, exact: true });
+    } else if (kind === "create") {
+      await page
+        .getByRole("button", {
+          name: `在 ${machine.name} 新建终端`,
+          exact: true,
+        })
+        .click();
+      dialog = page.getByRole("dialog", { name: "新建终端", exact: true });
+    } else if (kind === "terminals") {
+      await page
+        .getByRole("button", {
+          name: `查看 ${machine.name} 的终端`,
+          exact: true,
+        })
+        .click();
+      dialog = page.getByRole("dialog", { name: machine.name, exact: true });
+    } else {
+      const manager = await openManager(page);
+      dialog = manager;
+      if (kind === "enroll") {
+        await manager
+          .getByRole("button", { name: "接入设备", exact: true })
+          .click();
+        dialog = page.getByRole("dialog", { name: "接入设备", exact: true });
+        await expect(dialog).toContainText("test-enrollment");
+      } else if (kind === "device-rename" || kind === "remove") {
+        await manager
+          .getByRole("button", { name: `管理 ${machine.name}`, exact: true })
+          .click();
+        await page
+          .getByRole("button", {
+            name: kind === "remove" ? "移除设备" : "重命名设备",
+            exact: true,
+          })
+          .click();
+        dialog = page.getByRole("dialog", {
+          name: kind === "remove" ? `移除「${machine.name}」？` : "重命名设备",
+          exact: true,
+        });
+      }
+    }
+
+    const field = dialog.locator("input").first();
+    if (await field.count()) await field.fill("Unsaved draft");
+    await expectOutsideInteractionsToKeepOpen(page, dialog);
+    if (await field.count()) await expect(field).toHaveValue("Unsaved draft");
+    if (kind === "enroll")
+      await expect(dialog).toContainText("test-enrollment");
+
+    if (kind === "terminal-rename") {
+      await dialog
+        .getByRole("button", { name: "关闭弹窗", exact: true })
+        .click();
+    } else {
+      await page.keyboard.press("Escape");
+    }
+    await expect(dialog).toHaveCount(0);
+  });
 }
 
 test("overview device opens its terminal list and selects an existing terminal without creating one", async ({

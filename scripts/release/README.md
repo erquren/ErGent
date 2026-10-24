@@ -224,7 +224,15 @@ The web UI checks authentication about 1.5 seconds after disconnection. If the S
 发布包不含密码、令牌、数据库、AI CLI 或开发环境。
 manifest.json 记录版本、Git commit、工作区是否有未提交修改及文件校验值；外部 .sha256 校验压缩包。
 
-### 升级到 1.4.0 / Upgrade to 1.4.0
+### 升级到 1.5.0 / Upgrade to 1.5.0
+
+本版增加触控终端“上一页 / 下一页 / 回到最新”，将 Ctrl、Ctrl+C 和 Tab 收入“更多”，收紧顶部布局，并防止模态弹窗因点击外部或拖动选字而误关闭。普通终端翻看保留的本地记录；全屏应用接收 PageUp、PageDown、End，实际效果由应用决定。
+This release adds touch terminal paging, moves Ctrl, Ctrl+C and Tab into More, compacts the header, and prevents modal dialogs from closing on outside clicks or drag release. Normal terminals browse retained local scrollback; full-screen apps receive PageUp, PageDown and End with app-specific behavior.
+
+从 1.4.0 升级保留数据库和客户端配置，无需重新注册；没有新增数据库迁移，协议仍为 `ergent.preview.v3`。替换网页后刷新浏览器；重启客户端前保存终端中的工作。Docker 版本标签为 `erquren/ergent:1.5.0`，支持 Linux amd64 / arm64。
+Keep the database and client configuration when upgrading from 1.4.0. No new migration or protocol change is required. Refresh the browser after replacing the web UI and save terminal work before restarting clients. Docker tag: `erquren/ergent:1.5.0` for Linux amd64 / arm64.
+
+### 升级到 1.4.0 / Upgrade to 1.4.0 (historical)
 
 本版改进手机触摸滚动、显式键盘开关和输入布局，支持设备列表收起/展开。终端底部“复制”打开固定的只读文本，可选择片段或复制全部，保留代码缩进；普通输出可复制保留的滚动记录，Codex 等全屏应用仅提供当前画面，不包含被覆盖的历史对话。
 This release improves mobile scrolling, explicit keyboard controls, compact input layout and collapsible device navigation. The terminal copy panel freezes selectable plain text and preserves code indentation. Normal output exposes retained scrollback; full-screen apps such as Codex expose only the current screen, not overwritten conversation history.

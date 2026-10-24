@@ -35,6 +35,7 @@ export function TerminalView({
   const [ctrl, setCtrl] = useState(false);
   const [moreKeys, setMoreKeys] = useState(false);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const [alternate, setAlternate] = useState(false);
   const [copySnapshot, setCopySnapshot] = useState<TerminalTextSnapshot | null>(
     null,
   );
@@ -55,12 +56,33 @@ export function TerminalView({
     shortcut(
       `\x1b${terminal.current?.modes.applicationCursorKeysMode ? "O" : "["}${code}`,
     );
+  const navigate = (direction: "previous" | "next" | "latest") => {
+    const term = terminal.current;
+    if (!term) return;
+    setControl(false);
+    // Read the live buffer: output may switch modes before React renders.
+    if (term.buffer.active.type === "alternate") {
+      if (!writable || !running) return;
+      const key =
+        direction === "previous"
+          ? "\x1b[5~"
+          : direction === "next"
+            ? "\x1b[6~"
+            : `\x1b${term.modes.applicationCursorKeysMode ? "O" : "["}F`;
+      sendInput.current(key);
+    } else if (direction === "latest") {
+      term.scrollToBottom();
+    } else {
+      term.scrollPages(direction === "previous" ? -1 : 1);
+    }
+  };
   const claim = useRef<() => void>(() => {});
   const connection = useRef<TerminalConnection | null>(null);
   useEffect(() => {
     setWritable(false);
     setControl(false);
     setHistoryLost(false);
+    setAlternate(false);
     setCopySnapshot(null);
     if (!container.current) return;
     const term = new Terminal({
@@ -76,6 +98,9 @@ export function TerminalView({
     term.loadAddon(fit);
     term.open(container.current);
     terminal.current = term;
+    const bufferChange = term.buffer.onBufferChange((buffer) =>
+      setAlternate(buffer.type === "alternate"),
+    );
     setKeyboardOpen(false);
     const host = container.current;
     // Own touch scrolling so terminal mouse reporting cannot swallow gestures.
@@ -202,6 +227,7 @@ export function TerminalView({
       transport.dispose();
       observer.disconnect();
       input.dispose();
+      bufferChange.dispose();
       connection.current = null;
       sendInput.current = () => {};
       claim.current = () => {};
@@ -230,6 +256,7 @@ export function TerminalView({
       <div className="terminal-keys" aria-label={t("终端快捷键")}>
         <div className="key-row primary-keys">
           <button
+            className="keyboard-toggle"
             disabled={!keyboardOpen && (!writable || !running)}
             aria-label={t(keyboardOpen ? "收起键盘" : "键盘")}
             onPointerDown={(e) => e.preventDefault()}
@@ -242,28 +269,39 @@ export function TerminalView({
           >
             {t(keyboardOpen ? "收起键盘" : "键盘")}
           </button>
+          <div
+            className="terminal-navigation"
+            role="group"
+            aria-label={t("终端翻页")}
+          >
+            {(
+              [
+                ["previous", "上一页", "PageUp"],
+                ["next", "下一页", "PageDown"],
+                ["latest", "回到最新", "End"],
+              ] as const
+            ).map(([direction, label, key]) => (
+              <button
+                key={direction}
+                type="button"
+                disabled={alternate && (!writable || !running)}
+                title={
+                  alternate ? t("向当前应用发送 {key}", { key }) : t(label)
+                }
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={() => navigate(direction)}
+              >
+                {t(label)}
+              </button>
+            ))}
+          </div>
           <button
             disabled={!writable || !running}
-            aria-pressed={ctrl}
             onPointerDown={(e) => e.preventDefault()}
-            onClick={() => setControl(!ctrlRef.current)}
+            onClick={() => shortcut("\x1b")}
           >
-            Ctrl
+            Esc
           </button>
-          {[
-            ["Ctrl+C", "\x03"],
-            ["Esc", "\x1b"],
-            ["Tab", "\t"],
-          ].map(([label, value]) => (
-            <button
-              key={label}
-              disabled={!writable || !running}
-              onPointerDown={(e) => e.preventDefault()}
-              onClick={() => shortcut(value)}
-            >
-              {label}
-            </button>
-          ))}
           <button
             aria-label={t("方向{key}", { key: "↑" })}
             disabled={!writable || !running}
@@ -294,11 +332,26 @@ export function TerminalView({
           <div className="key-row">
             <button
               disabled={!writable || !running}
+              aria-pressed={ctrl}
               onPointerDown={(e) => e.preventDefault()}
-              onClick={() => shortcut("\x04")}
+              onClick={() => setControl(!ctrlRef.current)}
             >
-              Ctrl+D
+              Ctrl
             </button>
+            {[
+              ["Ctrl+C", "\x03"],
+              ["Tab", "\t"],
+              ["Ctrl+D", "\x04"],
+            ].map(([label, value]) => (
+              <button
+                key={label}
+                disabled={!writable || !running}
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={() => shortcut(value)}
+              >
+                {label}
+              </button>
+            ))}
           </div>
           <div className="key-row">
             {[

@@ -48,20 +48,11 @@ export function ModalDialog({
       aria-describedby={describedBy}
       aria-modal="true"
       aria-busy={busy}
+      // Keep drafts and text selections intact when the pointer leaves the dialog.
+      // Dismiss through explicit controls or Escape, never through the backdrop.
       onCancel={(event) => {
         event.preventDefault();
         if (!busy) onClose();
-      }}
-      onClick={(event) => {
-        if (event.target !== event.currentTarget || busy) return;
-        const rect = event.currentTarget.getBoundingClientRect();
-        if (
-          event.clientX < rect.left ||
-          event.clientX > rect.right ||
-          event.clientY < rect.top ||
-          event.clientY > rect.bottom
-        )
-          onClose();
       }}
     >
       {children}

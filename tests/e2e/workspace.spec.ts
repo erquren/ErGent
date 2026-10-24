@@ -504,6 +504,11 @@ test("mobile layout, terminal shortcuts and compact viewport", async ({
     await page.getByRole("button", { name: "设备 / 终端" }).tap();
     await page.getByRole("button", { name: /Mobile terminal/ }).tap();
     await expect(page.locator(".sidebar")).toBeHidden();
+    for (const name of ["Ctrl", "Ctrl+C", "Tab"])
+      await expect(
+        page.getByRole("button", { name, exact: true }),
+      ).toBeHidden();
+    await page.getByRole("button", { name: "更多快捷键", exact: true }).tap();
     await expect(
       page.getByRole("button", {
         name: "Ctrl+C",
@@ -511,6 +516,7 @@ test("mobile layout, terminal shortcuts and compact viewport", async ({
         includeHidden: true,
       }),
     ).toBeEnabled();
+    await page.getByRole("button", { name: "Tab", exact: true }).tap();
     await page
       .getByRole("button", { name: "Ctrl+C", exact: true, includeHidden: true })
       .tap();
@@ -520,13 +526,14 @@ test("mobile layout, terminal shortcuts and compact viewport", async ({
       page.getByRole("button", { name: "Ctrl", exact: true }),
     ).toHaveAttribute("aria-pressed", "false");
     await page.getByRole("button", { name: "方向↑", exact: true }).tap();
-    await expect.poll(() => inputs).toEqual(["\x03", "\x0c", "\x1b[A"]);
+    await expect.poll(() => inputs).toEqual(["\t", "\x03", "\x0c", "\x1b[A"]);
+    await page.getByRole("button", { name: "收起快捷键", exact: true }).tap();
     await expect(page.locator(".primary-keys button")).toHaveText([
       "键盘",
-      "Ctrl",
-      "Ctrl+C",
+      "上一页",
+      "下一页",
+      "回到最新",
       "Esc",
-      "Tab",
       "↑",
       "",
     ]);
@@ -550,7 +557,11 @@ test("mobile layout, terminal shortcuts and compact viewport", async ({
     await page.getByRole("button", { name: "收起快捷键", exact: true }).tap();
     await expect(page.locator(".extra-keys")).toBeHidden();
     await expect(
-      page.getByRole("button", { name: "Ctrl+C", exact: true }),
+      page.getByRole("button", {
+        name: "Ctrl+C",
+        exact: true,
+        includeHidden: true,
+      }),
     ).toBeEnabled();
     await page.keyboard.type(
       process.platform === "win32"

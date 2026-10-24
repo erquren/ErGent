@@ -101,7 +101,7 @@ docker compose pull server
 docker compose up -d --no-build server
 ```
 
-也可使用维护者确认存在的版本标签，例如 `erquren/ergent:1.4.0`，并记录实际摘要。在发布结果尚未确认前，使用上面的本地构建路径；不要把拉取失败误判为用户配置问题。
+也可使用维护者确认存在的版本标签，例如 `erquren/ergent:1.5.0`，并记录实际摘要。在发布结果尚未确认前，使用上面的本地构建路径；不要把拉取失败误判为用户配置问题。
 
 ## 3. 领取初始化码并创建账户
 
@@ -365,15 +365,15 @@ docker compose -f deploy/compose.dev-http.yaml \
 
 目标仓库固定为 [Docker Hub 的 erquren/ergent](https://hub.docker.com/r/erquren/ergent)。在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 配置 `DOCKERHUB_USERNAME`（Variable 或 Secret 均支持，Variable 优先）和 `DOCKERHUB_TOKEN`（Secret，使用对该仓库有写入权限的 Docker Hub 访问令牌）。fork 若需发布到其他镜像仓库，须先修改 workflow 中的镜像地址。
 
-每次上传使用 `Cargo.toml` 中的项目版本作为镜像标签，并检查网页版本一致。例如项目版本为 `1.4.0`，无论从 `main` 分支还是 `v1.4.0` Git 标签手动运行，都会发布 `docker.io/erquren/ergent:1.4.0`；从 Git 标签运行时，仍要求标签恰好为 `v<项目版本>`。新发布不再生成 `sha-<提交SHA>` 标签，也不自动创建 `latest`。提交 SHA 保存在镜像的 `org.opencontainers.image.revision` 标签中，项目版本保存在 `org.opencontainers.image.version` 中。
+每次上传使用 `Cargo.toml` 中的项目版本作为镜像标签，并检查网页版本一致。例如项目版本为 `1.5.0`，无论从 `main` 分支还是 `v1.5.0` Git 标签手动运行，都会发布 `docker.io/erquren/ergent:1.5.0`；从 Git 标签运行时，仍要求标签恰好为 `v<项目版本>`。新发布不再生成 `sha-<提交SHA>` 标签，也不自动创建 `latest`。提交 SHA 保存在镜像的 `org.opencontainers.image.revision` 标签中，项目版本保存在 `org.opencontainers.image.version` 中。
 
 同一项目版本再次发布会更新该 Docker 标签指向的镜像；发布新版本前同步修改 Rust 和网页版本。需要固定部署内容时使用发布摘要中的 digest。此修改不会删除历史 SHA 标签，不修改 GitHub Release/附件，也没有 tag/release 自动触发入口。
 
 验证和正式发布均使用原生架构机器：AMD64 在 `ubuntu-24.04`，ARM64 在 `ubuntu-24.04-arm` 上构建，不使用 QEMU 模拟编译。正式发布先分别按 digest 上传两种架构的镜像，两者成功后再合并为同一个版本标签的多架构镜像索引；任一架构失败都不会进入版本标签合并步骤。工作流串行执行，避免多个发布同时更新标签。
 
-发布 1.4.0 的步骤：
+发布 1.5.0 的步骤：
 
-1. 提交并推送包含此 workflow 和 `scripts/docker_tags.py` 的修改，确保所选分支或标签包含这些文件，且 Rust 与网页版本均为 `1.4.0`。旧 Git 标签若不包含本次修改，仍会执行旧发布规则。
+1. 提交并推送包含此 workflow 和 `scripts/docker_tags.py` 的修改，确保所选分支或标签包含这些文件，且 Rust 与网页版本均为 `1.5.0`。旧 Git 标签若不包含本次修改，仍会执行旧发布规则。
 2. 在 GitHub Actions 的 `Docker image (manual)` 中选择目标分支（例如 `main`），勾选 `publish` 后运行。也可使用已登录 GitHub 的 CLI：
 
    ```sh
@@ -384,11 +384,11 @@ docker compose -f deploy/compose.dev-http.yaml \
 4. 发布成功后验证镜像索引并拉取：
 
    ```sh
-   docker buildx imagetools inspect erquren/ergent:1.4.0
-   docker pull erquren/ergent:1.4.0
+   docker buildx imagetools inspect erquren/ergent:1.5.0
+   docker pull erquren/ergent:1.5.0
    ```
 
-镜像索引应包含 `linux/amd64` 和 `linux/arm64`；Docker 会按运行机器的架构选择镜像。部署时可设置 `ERGENT_IMAGE=erquren/ergent:1.4.0`，推荐记录并使用运行摘要中实际发布的 digest。仅推送版本标签或公开 GitHub Release 不会上传 Docker 镜像。
+镜像索引应包含 `linux/amd64` 和 `linux/arm64`；Docker 会按运行机器的架构选择镜像。部署时可设置 `ERGENT_IMAGE=erquren/ergent:1.5.0`，推荐记录并使用运行摘要中实际发布的 digest。仅推送版本标签或公开 GitHub Release 不会上传 Docker 镜像。
 
 ## 常见问题
 

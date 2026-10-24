@@ -184,10 +184,10 @@ select:focus-visible {
 }
 .topbar {
   border-radius: 22px;
-  min-height: 58px;
-  height: 58px;
-  padding: 0 22px;
-  gap: 18px;
+  min-height: 48px;
+  height: 48px;
+  padding: 0 16px;
+  gap: 12px;
 }
 .topbar .appearance-control {
   margin-left: auto;
@@ -277,14 +277,31 @@ select:focus-visible {
   border-radius: 12px;
 }
 .terminal-page {
-  padding: 28px 16px 12px;
+  padding: 8px 10px 6px;
+}
+.terminal-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  gap: 6px 12px;
+  margin-bottom: 6px;
+  min-width: 0;
 }
 .page-heading {
-  margin-bottom: 16px;
+  flex: 1 1 240px;
+  min-width: 0;
+  margin: 0;
 }
 .page-heading h1 {
-  font-size: 25px;
-  letter-spacing: -0.7px;
+  font-size: 20px;
+  letter-spacing: -0.5px;
+  margin: 0;
+  gap: 8px;
+}
+.terminal-heading:has(.danger) .page-heading {
+  flex-basis: 100%;
+  flex-wrap: wrap;
 }
 .badge {
   border: none;
@@ -301,22 +318,31 @@ select:focus-visible {
   padding: 0;
 }
 .page-actions button.danger,
-.page-actions:has(.danger) button {
+.page-actions:has(.danger) button,
+.page-actions button.terminal-dismiss {
   width: auto;
   border-radius: 18px;
   padding: 8px 12px;
 }
 .tool-summary {
-  margin-bottom: 12px;
-  min-height: 34px;
-  padding-left: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  min-height: 36px;
+  padding: 0;
 }
 .tool-summary > span {
   font-size: 11px;
+  min-width: 0;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .terminal-utilities {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
   gap: 6px;
 }
 .terminal-frame {
@@ -327,7 +353,7 @@ select:focus-visible {
     0 0 0 5px #a4beff09;
 }
 .terminal-toolbar {
-  height: 40px;
+  height: 30px;
   border-bottom-color: color-mix(
     in srgb,
     var(--terminal-fg) 10%,
@@ -342,7 +368,7 @@ select:focus-visible {
   );
 }
 .page-foot {
-  padding: 13px 4px 0;
+  padding: 6px 4px 0;
 }
 .glass-popover {
   position: relative;
@@ -565,7 +591,7 @@ select:focus-visible {
     width: 115px;
   }
   .terminal-page {
-    padding: 22px 10px 10px;
+    padding: 8px 8px 6px;
   }
 }
 @media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
@@ -611,11 +637,13 @@ select:focus-visible {
     display: flex;
     align-items: center;
     flex-shrink: 0;
+    flex-wrap: nowrap;
     gap: 4px;
     margin-bottom: 4px;
     min-width: 0;
   }
   .page-heading {
+    flex: 0 0 auto;
     order: 1;
     margin: 0;
   }

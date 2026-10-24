@@ -1103,68 +1103,88 @@ p {
 
 .mobile-nav-toggle,
 .mobile-workspace-title,
-.nav-backdrop,
-.terminal-keys {
+.nav-backdrop {
   display: none;
 }
-@media (max-width: 760px), (pointer: coarse) {
+.terminal-keys {
+  display: none;
+  flex-shrink: 0;
+  position: relative;
+  background: #191e24;
+  border-top: 1px solid #293037;
+  padding: 4px;
+}
+.key-row {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  padding: 2px;
+}
+.primary-keys {
+  gap: 3px;
+  padding-inline: 0;
+  overflow: visible;
+}
+.terminal-keys button {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 6px 9px;
+  background: #263039;
+  color: #dae6ee;
+  border-color: #3b4853;
+  touch-action: manipulation;
+}
+.terminal-keys .primary-keys button {
+  flex: 0.7;
+  min-width: 0;
+  padding-inline: 4px;
+  font-size: 11px;
+}
+.terminal-keys .primary-keys .keyboard-toggle {
+  flex: 1.2;
+}
+.terminal-navigation {
+  display: flex;
+  flex: 3.4;
+  min-width: 0;
+  gap: 3px;
+}
+.terminal-keys .terminal-navigation button {
+  flex: 1;
+}
+.terminal-keys .terminal-navigation button:last-child {
+  flex: 1.4;
+}
+.terminal-keys button[aria-pressed="true"] {
+  background: #405d35;
+  border-color: #b9f57f;
+  color: #e7ffce;
+}
+.ctrl-picker {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  background: #263039;
+  padding: 8px;
+  border: 1px solid #53634b;
+  box-shadow: 0 -5px 20px #0005;
+}
+.ctrl-picker > span {
+  display: block;
+  color: #c2d0b6;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+@media (pointer: coarse) {
   .terminal-keys {
     display: block;
-    flex-shrink: 0;
-    position: relative;
-    background: #191e24;
-    border-top: 1px solid #293037;
-    padding: 4px;
   }
-  .key-row {
-    display: flex;
-    gap: 5px;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scrollbar-width: thin;
-    padding: 2px;
-  }
-  .primary-keys {
-    gap: 3px;
-    padding-inline: 0;
-    overflow: visible;
-  }
-  .terminal-keys .primary-keys button {
-    flex: 1;
-    padding-inline: 4px;
-    font-size: 11px;
-  }
-  .terminal-keys button {
-    flex: 0 0 auto;
-    min-width: 44px;
-    min-height: 44px;
-    padding: 6px 9px;
-    background: #263039;
-    color: #dae6ee;
-    border-color: #3b4853;
-    touch-action: manipulation;
-  }
-  .terminal-keys button[aria-pressed="true"] {
-    background: #405d35;
-    border-color: #b9f57f;
-    color: #e7ffce;
-  }
-  .ctrl-picker {
-    position: absolute;
-    bottom: 100%;
-    left: 0;
-    right: 0;
-    background: #263039;
-    padding: 8px;
-    border: 1px solid #53634b;
-    box-shadow: 0 -5px 20px #0005;
-  }
-  .ctrl-picker > span {
-    display: block;
-    color: #c2d0b6;
-    font-size: 12px;
-    margin-bottom: 4px;
-  }
+}
+@media (max-width: 760px), (pointer: coarse) {
   .xterm .xterm-helper-textarea {
     font-size: 16px !important;
   }
@@ -1789,8 +1809,5 @@ button:hover {
   .app:has(.xterm-helper-textarea:focus) .terminal-palette,
   .app:has(.xterm-helper-textarea:focus) .tool-summary {
     display: none;
-  }
-  .terminal-keys .primary-keys button {
-    min-width: 0;
   }
 }
