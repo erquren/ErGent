@@ -54,7 +54,22 @@ class GitHub:
         raise PublishError('Tag does not resolve to a commit')
 
     def release(self, tag):
-        return self.api(f'releases/tags/{quote(tag, safe="")}', missing_ok=True)
+        release = self.api(f'releases/tags/{quote(tag, safe="")}', missing_ok=True)
+        if release is not None:
+            return release
+        # The by-tag endpoint omits drafts, even for their authenticated owner.
+        # Resolve them through the paginated release list before creating one.
+        matches = []
+        page = 1
+        while True:
+            batch = self.api(f'releases?per_page=100&page={page}')
+            matches.extend(item for item in batch if item['tag_name'] == tag)
+            if len(batch) < 100:
+                break
+            page += 1
+        if len(matches) > 1:
+            raise PublishError('Multiple releases use the expected tag; stopped without mutations')
+        return matches[0] if matches else None
 
     def assets(self, release_id):
         assets = []

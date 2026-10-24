@@ -153,8 +153,11 @@ class FakeGitHub(publisher.GitHub):
             if path == 'git/tags/' + 'b' * 40:
                 return self.result(args, payload={'object': {'type': 'commit', 'sha': self.tag_commit}})
             if path.startswith('releases/tags/'):
-                return self.result(args, status=200 if self.release_value else 404,
-                    code=0 if self.release_value else 1, payload=self.release_value)
+                visible = self.release_value is not None and not self.release_value['draft']
+                return self.result(args, status=200 if visible else 404,
+                    code=0 if visible else 1, payload=self.release_value if visible else None)
+            if path.startswith('releases?'):
+                return self.result(args, payload=[self.release_value] if self.release_value else [])
             if path.startswith('releases/321/assets?'):
                 page = int(path.split('page=')[-1])
                 return self.result(args, payload=self.remote_assets[(page - 1) * 100:page * 100])
@@ -484,7 +487,35 @@ class ApiParsingTests(unittest.TestCase):
     def test_only_http_404_is_absent(self):
         result = subprocess.CompletedProcess([], 1, 'HTTP/2.0 404 Not Found\n\n{}', 'not found')
         with mock.patch.object(self.github, 'command', return_value=result):
-            self.assertIsNone(self.github.release(TAG))
+            self.assertIsNone(self.github.api(f'releases/tags/{TAG}', missing_ok=True))
+
+    def test_release_finds_draft_omitted_by_tag_endpoint(self):
+        draft = {'id': 321, 'tag_name': TAG, 'draft': True}
+        with mock.patch.object(self.github, 'api', side_effect=[None, [draft]]) as api:
+            self.assertEqual(draft, self.github.release(TAG))
+        self.assertEqual([
+            mock.call(f'releases/tags/{TAG}', missing_ok=True),
+            mock.call('releases?per_page=100&page=1'),
+        ], api.call_args_list)
+
+    def test_release_searches_all_pages_for_draft(self):
+        unrelated = [{'id': index, 'tag_name': f'v0.{index}', 'draft': False} for index in range(100)]
+        draft = {'id': 321, 'tag_name': TAG, 'draft': True}
+        with mock.patch.object(self.github, 'api', side_effect=[None, unrelated, [draft]]) as api:
+            self.assertEqual(draft, self.github.release(TAG))
+        self.assertEqual(mock.call('releases?per_page=100&page=2'), api.call_args_list[-1])
+
+    def test_ambiguous_drafts_are_rejected(self):
+        drafts = [{'id': index, 'tag_name': TAG, 'draft': True} for index in (321, 322)]
+        with mock.patch.object(self.github, 'api', side_effect=[None, drafts]):
+            with self.assertRaisesRegex(publisher.PublishError, 'Multiple releases'):
+                self.github.release(TAG)
+
+    def test_published_release_does_not_search_drafts(self):
+        release = {'id': 321, 'tag_name': TAG, 'draft': False}
+        with mock.patch.object(self.github, 'api', return_value=release) as api:
+            self.assertEqual(release, self.github.release(TAG))
+        api.assert_called_once_with(f'releases/tags/{TAG}', missing_ok=True)
 
     def test_stderr_404_without_http_status_is_error(self):
         result = subprocess.CompletedProcess([], 1, '', 'proxy network failure 404')
