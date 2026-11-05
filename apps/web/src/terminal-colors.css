@@ -1,0 +1,43 @@
+/* Render only: keep the remote SGR and terminal buffer unchanged. This affects
+   any program using ANSI palette background 2, not just directory listings.
+   The block cursor is exempt so its visibility and blink still work. */
+.terminal-host.hide-ansi-green-background
+  .xterm-rows
+  .xterm-bg-2:not(.xterm-cursor-block) {
+  background-color: transparent !important;
+}
+/* The foreground black in GNU ls's sticky-writable style relies on its green
+   background. Inherit the theme foreground so it stays legible on dark themes. */
+.terminal-host.hide-ansi-green-background
+  .xterm-rows
+  .xterm-bg-2.xterm-fg-0:not(.xterm-cursor-block),
+.terminal-host.hide-ansi-green-background
+  .xterm-rows
+  .xterm-bg-2.xterm-fg-8:not(.xterm-cursor-block) {
+  color: inherit !important;
+}
+.terminal-green-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 10px;
+  border-top: 1px solid var(--glass-line);
+  cursor: pointer;
+}
+.terminal-green-setting span {
+  display: grid;
+  gap: 4px;
+}
+.terminal-green-setting strong {
+  font-size: 12px;
+}
+.terminal-green-setting small {
+  color: var(--secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.terminal-green-setting input {
+  flex-shrink: 0;
+}

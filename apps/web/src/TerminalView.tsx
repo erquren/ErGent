@@ -11,15 +11,18 @@ import {
 } from "./terminal-text";
 import type { SessionInfo } from "../../../packages/protocol-ts";
 import "@xterm/xterm/css/xterm.css";
+import "./terminal-colors.css";
 
 export function TerminalView({
   session,
   socket,
   theme,
+  hideGreenBackground,
 }: {
   session: SessionInfo;
   socket: WebSocket | null;
   theme: ITheme;
+  hideGreenBackground: boolean;
 }) {
   useLanguage();
   const themeRef = useRef(theme);
@@ -251,7 +254,10 @@ export function TerminalView({
   return (
     <div className="terminal-shell">
       <div className="terminal-canvas">
-        <div className="terminal-host" ref={container} />
+        <div
+          className={`terminal-host${hideGreenBackground ? " hide-ansi-green-background" : ""}`}
+          ref={container}
+        />
       </div>
       <div className="terminal-keys" aria-label={t("终端快捷键")}>
         <div className="key-row primary-keys">

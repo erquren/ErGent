@@ -605,3 +605,124 @@ test("mobile English dark drawer and confirmation fit, including long device nam
     .click();
   await expect(drawer).toBeVisible();
 });
+
+const sidebarMachines = (page: Page) =>
+  page.locator(".machine-list .machine-group");
+const sidebarMachine = (page: Page, id: string) =>
+  page.locator(`.machine-list .machine-group[data-machine-id="${id}"]`);
+const reorderHandle = (page: Page, id: string) =>
+  sidebarMachine(page, id).locator('button[draggable="true"]');
+
+async function expectMachineOrder(page: Page, ids: string[]) {
+  await expect
+    .poll(() =>
+      sidebarMachines(page).evaluateAll((items) =>
+        items.map((item) => item.getAttribute("data-machine-id")),
+      ),
+    )
+    .toEqual(ids);
+}
+
+test("dragging a device reorders the sidebar and persists after reload", async ({
+  page,
+}) => {
+  const state = await mockServer(page);
+  state.machines.push({ ...machine, id: "third", name: "Third device" });
+  state.broadcast();
+  await expectMachineOrder(page, ["online", "offline", "third"]);
+  const handle = reorderHandle(page, "third");
+  await expect(handle).toHaveAccessibleName(/Third device/);
+  await handle.dragTo(
+    sidebarMachine(page, "online").locator(".machine-heading"),
+    {
+      targetPosition: { x: 30, y: 4 },
+    },
+  );
+  await expectMachineOrder(page, ["third", "online", "offline"]);
+  await expect(page.locator(".terminal-page")).toHaveCount(0);
+  await expect(
+    sidebarMachine(page, "online").locator(".machine-toggle"),
+  ).toHaveAttribute("aria-expanded", "true");
+  await page.reload();
+  await expectMachineOrder(page, ["third", "online", "offline"]);
+  expect(
+    state.requests.filter((request) => /^(POST|PATCH|DELETE) /.test(request)),
+  ).toEqual([]);
+});
+
+test("keyboard device ordering preserves focus and existing device interactions", async ({
+  page,
+}) => {
+  await mockServer(page);
+  const handle = reorderHandle(page, "offline");
+  await handle.focus();
+  await handle.press("ArrowUp");
+  await expectMachineOrder(page, ["offline", "online"]);
+  await expect(handle).toBeFocused();
+  await handle.press("ArrowUp");
+  await expectMachineOrder(page, ["offline", "online"]);
+  await handle.press("ArrowDown");
+  await expectMachineOrder(page, ["online", "offline"]);
+  await handle.press("ArrowDown");
+  await expectMachineOrder(page, ["online", "offline"]);
+
+  const online = sidebarMachine(page, "online");
+  const toggle = online.locator(".machine-toggle");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(online.locator(".session-card")).toBeHidden();
+  await reorderHandle(page, "online").press("ArrowDown");
+  await expectMachineOrder(page, ["offline", "online"]);
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await toggle.click();
+  await online.locator(".session-card").click();
+  await expect(page.locator(".terminal-title")).toHaveText(session.title);
+
+  await online
+    .getByRole("button", { name: `管理 ${machine.name}`, exact: true })
+    .click();
+  await page.getByRole("button", { name: "重命名设备", exact: true }).click();
+  const rename = page.getByRole("dialog", { name: "重命名设备", exact: true });
+  await rename.getByLabel("设备名称", { exact: true }).fill("Renamed PC");
+  await rename.getByRole("button", { name: "保存名称", exact: true }).click();
+  await expect(rename).toHaveCount(0);
+  await expect(online.locator(".machine-toggle")).toContainText("Renamed PC");
+  await expectMachineOrder(page, ["offline", "online"]);
+  await online
+    .getByRole("button", { name: "在 Renamed PC 新建终端", exact: true })
+    .click();
+  const create = page.getByRole("dialog", { name: "新建终端", exact: true });
+  await expect(
+    create.getByRole("combobox", { name: "设备", exact: true }),
+  ).toHaveValue("online");
+  await page.keyboard.press("Escape");
+  await expect(create).toHaveCount(0);
+  await expectMachineOrder(page, ["offline", "online"]);
+  await expect(
+    sidebarMachine(page, "offline").getByRole("button", {
+      name: "在 Offline Linux 新建终端",
+      exact: true,
+    }),
+  ).toBeDisabled();
+});
+
+test("inventory refresh preserves custom order and appends newly discovered devices", async ({
+  page,
+}) => {
+  const state = await mockServer(page);
+  await reorderHandle(page, "offline").press("ArrowUp");
+  await expectMachineOrder(page, ["offline", "online"]);
+  state.machines[0].name = "Updated PC";
+  state.machines[1].online = true;
+  state.machines.push({ ...machine, id: "new", name: "New device" });
+  state.broadcast();
+  await expectMachineOrder(page, ["offline", "online", "new"]);
+  await expect(
+    sidebarMachine(page, "online").locator(".machine-toggle"),
+  ).toContainText("Updated PC");
+  state.machines[1].revoked = true;
+  state.broadcast();
+  await expectMachineOrder(page, ["online", "new"]);
+  await page.reload();
+  await expectMachineOrder(page, ["online", "new"]);
+});

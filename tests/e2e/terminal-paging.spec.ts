@@ -421,3 +421,37 @@ test("paging buttons stay visible and tappable on touch devices and hidden on de
     await desktop.close();
   }
 });
+
+test("ANSI green background preference persists and is reversible", async ({
+  page,
+}) => {
+  await terminalPeer(page, "\x1b[34;42mother\x1b[0m");
+  const host = page.locator(".terminal-host");
+  await expect(host).toHaveClass(/hide-ansi-green-background/);
+  await page.getByRole("button", { name: "终端配色", exact: true }).click();
+  const checkbox = page.getByRole("checkbox", { name: /隐藏 ANSI 绿底/ });
+  await expect(checkbox).toBeChecked();
+  await expect(
+    page.getByText("影响所有使用标准 ANSI 绿色背景的程序；关闭后恢复原样。"),
+  ).toBeVisible();
+  await checkbox.uncheck();
+  await expect(host).not.toHaveClass(/hide-ansi-green-background/);
+  expect(
+    await page.evaluate(() =>
+      localStorage.getItem("ergent.terminal.hide-green-background"),
+    ),
+  ).toBe("false");
+  await page.reload();
+  await page
+    .getByRole("button", { name: "查看 Paging machine 的终端", exact: true })
+    .click();
+  await page
+    .getByRole("dialog", { name: "Paging machine", exact: true })
+    .getByRole("button", { name: "Paging terminal", exact: true })
+    .click();
+  await expect(host).not.toHaveClass(/hide-ansi-green-background/);
+  await page.getByRole("button", { name: "终端配色", exact: true }).click();
+  await expect(checkbox).not.toBeChecked();
+  await checkbox.check();
+  await expect(host).toHaveClass(/hide-ansi-green-background/);
+});

@@ -868,3 +868,146 @@ select:focus-visible {
     height: 44px;
   }
 }
+
+/* Keep chrome geometry independent of CJK/Latin fallback font metrics. A locale
+   change must not resize the terminal and trigger a PTY geometry resync. */
+:root {
+  line-height: 1.5;
+}
+button,
+input,
+select {
+  line-height: 1.5;
+}
+.login {
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr);
+}
+.login-story {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.topbar > div:first-of-type:not(.header-controls) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topbar .connection {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.page-foot {
+  line-height: 14px;
+  min-height: 20px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.page-foot > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.terminal-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(180px, 28vw, 360px);
+}
+.terminal-heading:has(.danger) .page-heading {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.terminal-heading:has(.danger) .tool-summary {
+  grid-column: 2;
+}
+.page-heading h1 {
+  line-height: 30px;
+}
+.page-heading .badge {
+  width: 76px;
+  text-align: center;
+  line-height: 12px;
+  white-space: nowrap;
+}
+.tool-summary {
+  width: 100%;
+}
+.tool-summary > span {
+  flex: 1;
+}
+.palette-control > .glass-trigger {
+  width: 132px;
+}
+.palette-current {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.page-actions:has(.danger) {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.page-actions:has(.danger) > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.page-actions:has(.danger) button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.page-actions button.danger {
+  width: 104px;
+}
+.page-actions:has(.danger) button:last-child {
+  width: 72px;
+}
+.page-actions button.terminal-dismiss {
+  width: 180px;
+  max-width: 100%;
+  line-height: 14px;
+}
+.overview-heading {
+  gap: 16px;
+}
+.overview-heading > .primary {
+  flex-shrink: 0;
+  min-width: 140px;
+  white-space: nowrap;
+}
+@media (min-width: 761px) and (max-width: 1050px) {
+  .topbar .connection {
+    display: none;
+  }
+}
+@media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
+  .terminal-heading {
+    display: flex;
+  }
+  .terminal-heading:has(.danger) .page-heading {
+    display: flex;
+  }
+  .mobile-nav-toggle {
+    width: 124px;
+    white-space: nowrap;
+  }
+  .terminal-keys .primary-keys button {
+    height: 44px;
+    line-height: 14px;
+  }
+  .terminal-utilities .palette-control > .glass-trigger {
+    width: 44px;
+  }
+  .topbar .connection {
+    display: none;
+  }
+}
+
+@media (max-width: 650px) {
+  .overview h1 {
+    font-size: 23px;
+  }
+}
