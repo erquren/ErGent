@@ -82,6 +82,8 @@ async function terminalPeer(page: Page, initialScreen = history) {
   };
   await page.routeWebSocket("**/api/v1/ws/browser", (ws) => {
     socket = ws;
+    // Inventory transfer IDs start at 1 for each new connection.
+    transfer = 0;
     inventory();
     ws.onMessage((raw) => {
       const command = JSON.parse(raw.toString()) as BrowserCommand;
