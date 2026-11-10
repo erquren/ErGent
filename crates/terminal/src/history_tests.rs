@@ -29,6 +29,7 @@ fn exit_naturally(manager: &TerminalManager, id: &str) {
 
 #[test]
 fn exited_runtime_is_reclaimed_but_history_and_idempotency_survive() {
+    let _pty = PTY_TEST_LOCK.lock();
     let tmp = tempfile::tempdir().unwrap();
     let manager = TerminalManager::new("machine".into(), "epoch".into());
     let config = CreateTerminal {
@@ -66,6 +67,7 @@ fn exited_runtime_is_reclaimed_but_history_and_idempotency_survive() {
 
 #[test]
 fn more_than_one_thousand_historical_sessions_do_not_consume_live_capacity() {
+    let _pty = PTY_TEST_LOCK.lock();
     let tmp = tempfile::tempdir().unwrap();
     let manager = TerminalManager::new("machine".into(), "epoch".into());
     let config = CreateTerminal {
@@ -132,6 +134,7 @@ fn more_than_one_thousand_historical_sessions_do_not_consume_live_capacity() {
 #[cfg(unix)]
 #[test]
 fn exited_shell_does_not_leave_a_reader_waiting_for_background_descendants() {
+    let _pty = PTY_TEST_LOCK.lock();
     let tmp = tempfile::tempdir().unwrap();
     let manager = TerminalManager::new("machine".into(), "epoch".into());
     manager
@@ -171,6 +174,7 @@ fn exited_shell_does_not_leave_a_reader_waiting_for_background_descendants() {
 #[cfg(unix)]
 #[test]
 fn natural_exit_publishes_large_tail_before_exit_and_runtime_reclamation() {
+    let _pty = PTY_TEST_LOCK.lock();
     let tmp = tempfile::tempdir().unwrap();
     let manager = TerminalManager::new("machine".into(), "epoch".into());
     manager
@@ -276,6 +280,7 @@ fn natural_exit_publishes_large_tail_before_exit_and_runtime_reclamation() {
 
 #[test]
 fn final_recovery_expires_visibly_without_retaining_runtime_capacity() {
+    let _pty = PTY_TEST_LOCK.lock();
     let tmp = tempfile::tempdir().unwrap();
     let manager = TerminalManager::new("machine".into(), "epoch".into());
     let config = CreateTerminal {

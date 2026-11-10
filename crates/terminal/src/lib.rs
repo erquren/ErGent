@@ -27,6 +27,11 @@ use std::{
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+// The capacity test intentionally opens 20 live PTYs. macOS runners have a
+// small global PTY budget, so real-PTY tests must not race each other for it.
+#[cfg(test)]
+static PTY_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 struct Lease {
     viewer: String,
     id: String,
@@ -1240,6 +1245,7 @@ mod tests {
 
     #[test]
     fn close_real_process_returns_acceptance_then_wait_confirms_exit() {
+        let _pty = PTY_TEST_LOCK.lock();
         let tmp = tempfile::tempdir().unwrap();
         let manager = TerminalManager::new("machine".into(), "epoch".into());
         let mut events = manager.events();
@@ -1299,6 +1305,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn tool_events_are_terminal_scoped_and_deduplicated() {
+        let _pty = PTY_TEST_LOCK.lock();
         use ergent_protocol::{ToolEventKind as K, ToolState};
         let tmp = tempfile::tempdir().unwrap();
         let manager = TerminalManager::new("machine".into(), "epoch".into());
@@ -1360,6 +1367,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn real_pty_answers_cursor_queries_with_no_viewer_or_input_lease() {
+        let _pty = PTY_TEST_LOCK.lock();
         let tmp = tempfile::tempdir().unwrap();
         let manager = TerminalManager::new("machine".into(), "epoch".into());
         manager
@@ -1393,7 +1401,13 @@ mod tests {
                 .screen()
                 .contents();
             if screen.contains("QUERY_COMPLETE") {
-                assert!(screen.contains("1b 5b 34 3b 39 52"));
+                assert!(
+                    screen
+                        .split_whitespace()
+                        .collect::<String>()
+                        .contains("1b5b343b3952"),
+                    "unexpected synthetic cursor response: {screen:?}"
+                );
                 break;
             }
             assert!(
@@ -1408,6 +1422,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn reconnect_invalidates_streams_and_rechecks_queued_writes() {
+        let _pty = PTY_TEST_LOCK.lock();
         struct Capture(Arc<Mutex<Vec<u8>>>);
         impl Write for Capture {
             fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -1527,6 +1542,7 @@ mod tests {
 
     #[test]
     fn actual_pty_survives_detach_and_create_is_idempotent() {
+        let _pty = PTY_TEST_LOCK.lock();
         let tmp = tempfile::tempdir().unwrap();
         let manager = TerminalManager::new("machine".into(), "epoch".into());
         let cfg = CreateTerminal {
