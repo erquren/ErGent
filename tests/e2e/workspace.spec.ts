@@ -711,6 +711,163 @@ test("mobile layout, terminal shortcuts and compact viewport", async ({
   }
 });
 
+test("Codex-like cursor queries survive detached viewers, switching and resize without duplicate replies", async ({
+  browser,
+}) => {
+  test.skip(process.platform === "win32", "Raw PTY fixture uses a POSIX shell");
+  const context = await browser.newContext({
+    locale: "zh-CN",
+    storageState: await api.storageState(),
+  });
+  const page = await context.newPage();
+  const sessions: string[] = [];
+  const auditPath = join(folder, `tui-audit-${randomUUID()}.json`);
+  const controlPath = join(folder, `tui-control-${randomUUID()}.json`);
+  const title = "Codex query recovery";
+  const inputs: string[] = [];
+  const watchInputs = (viewer: import("@playwright/test").Page) => {
+    viewer.on("websocket", (socket) => {
+      socket.on("framesent", ({ payload }) => {
+        const message = JSON.parse(payload.toString());
+        if (message.type === "terminal.input")
+          inputs.push(
+            Buffer.from(message.payload.dataBase64, "base64").toString(),
+          );
+      });
+    });
+  };
+  const readAudit = () => {
+    try {
+      return JSON.parse(readFileSync(auditPath, "utf8"));
+    } catch {
+      return undefined;
+    }
+  };
+  const trigger = (id: number) =>
+    writeFileSync(controlPath, JSON.stringify({ id }));
+  const completed = async (id: number) => {
+    await expect.poll(() => readAudit()?.errors).toEqual([]);
+    await expect.poll(() => readAudit()?.completed, { timeout: 8000 }).toBe(id);
+    expect(readAudit().replies).toHaveLength(id * 4);
+    expect(readAudit().unexpected).toEqual([]);
+    expect(readAudit().errors).toEqual([]);
+  };
+  const connected = (viewer = page) =>
+    expect(viewer.getByText("已连接 · 输入在设备上执行")).toBeVisible();
+  const select = async (name: string, viewer = page) => {
+    await viewer.locator(".session-card").filter({ hasText: name }).click();
+  };
+  watchInputs(page);
+  try {
+    for (const name of [title, "Query switching target"]) {
+      const response = await api.post(
+        `/api/v1/machines/${machineId}/sessions`,
+        {
+          headers: { ...headers(), "Idempotency-Key": randomUUID() },
+          data: { title: name, cwd: folder, cols: 80, rows: 24 },
+        },
+      );
+      expect(response.ok()).toBeTruthy();
+      sessions.push((await response.json()).data.sessionId);
+    }
+    await page.goto(origin);
+    await select(title);
+    await connected();
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    await page.locator(".xterm-helper-textarea").focus();
+    await page.keyboard.type(
+      `${quote(process.execPath)} ${quote(resolve(root, "tests/fixtures/codex-tui.cjs"))} ${quote(controlPath)} ${quote(auditPath)}\n`,
+    );
+    await expect.poll(() => readAudit()?.ready).toBe(true);
+    await expect(page.locator(".xterm-rows")).toContainText("CODEX_TUI_FRAME");
+    inputs.length = 0;
+
+    // No viewer has attached to this query's output. A browser-only responder
+    // cannot unblock the raw-mode application, even if it later sees a snapshot.
+    await select("Query switching target");
+    await connected();
+    trigger(1);
+    await completed(1);
+    await select(title);
+    await connected();
+    await expect(page.locator(".xterm-rows")).toContainText("TURN_1_COMPLETE");
+    await expect(page.locator(".xterm-rows")).toContainText(
+      "PERSISTENT_CONTEXT",
+    );
+
+    trigger(2);
+    await completed(2);
+    await expect(page.locator(".xterm-rows")).toContainText("TURN_2_COMPLETE");
+
+    // Resize while a query batch is in flight, exercising snapshot recovery.
+    trigger(3);
+    await page.setViewportSize({ width: 1100, height: 720 });
+    await connected();
+    await completed(3);
+    await expect(page.locator(".xterm-rows")).toContainText("TURN_3_COMPLETE");
+
+    for (let id = 4; id <= 6; id++) {
+      await select("Query switching target");
+      trigger(id);
+      await select(title);
+      await select("Query switching target");
+      await select(title);
+      await connected();
+      await completed(id);
+      await expect(page.locator(".xterm-rows")).toContainText(
+        `TURN_${id}_COMPLETE`,
+      );
+    }
+
+    // Both real xterms consume the same output, only one owns the input lease.
+    const second = await context.newPage();
+    watchInputs(second);
+    await second.goto(origin);
+    await select(title, second);
+    await expect(
+      second.getByRole("button", { name: "接管终端" }),
+    ).toBeVisible();
+    trigger(7);
+    await completed(7);
+    for (const viewer of [page, second]) {
+      await expect(viewer.locator(".xterm-rows")).toContainText(
+        "TURN_7_COMPLETE",
+      );
+      await expect(viewer.locator(".xterm-rows")).toContainText(
+        "PERSISTENT_CONTEXT",
+      );
+    }
+    // Wait until both renderers have consumed the query output, then verify
+    // neither generated a browser input frame (including a rejected duplicate).
+    expect(inputs).toEqual([]);
+    await page.locator(".xterm-helper-textarea").focus();
+    await page.keyboard.type("k");
+    for (const viewer of [page, second]) {
+      await expect(viewer.locator(".xterm-rows")).toContainText(
+        "FOLLOW_UP_KEY_ACCEPTED",
+      );
+      await expect(viewer.locator(".xterm-rows")).toContainText(
+        "CODEX_TUI_FRAME",
+      );
+      await expect(viewer.locator(".xterm-rows")).toContainText(
+        "PERSISTENT_CONTEXT",
+      );
+    }
+    expect(readAudit().keys).toEqual(["k"]);
+    expect(readAudit().replies).toHaveLength(28);
+    expect(readAudit().unexpected).toEqual([]);
+    expect(readAudit().errors).toEqual([]);
+    expect(inputs).toEqual(["k"]);
+  } finally {
+    await context.close();
+    for (const sessionId of sessions)
+      await api.post(`/api/v1/sessions/${sessionId}/close`, {
+        headers: { ...headers(), "Idempotency-Key": randomUUID() },
+        data: {},
+      });
+  }
+});
+
 test("device management revokes offline enrollment and rejects its old credential", async ({
   browser,
 }) => {

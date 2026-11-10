@@ -70,11 +70,15 @@ fn buffer(screen: &vt100::Screen) -> Vec<u8> {
     // Save with full margins so a saved cursor can legitimately lie outside the
     // *current* margins. DECSC also saves SGR attributes and origin mode.
     mode(&mut data, saved_origin);
+    // cursor_state_formatted may redraw a pending-wrap cell, and computes its
+    // SGR transitions from default attributes, not the preceding stream state.
+    data.extend_from_slice(b"\x1b[0m");
     data.extend(saved.cursor_state_formatted());
     data.extend(saved.attributes_formatted());
     data.extend_from_slice(b"\x1b7");
     data.extend_from_slice(format!("\x1b[{};{}r", top + 1, bottom + 1).as_bytes());
     mode(&mut data, current_origin);
+    data.extend_from_slice(b"\x1b[0m");
     data.extend(cursor(screen, if current_origin { top } else { 0 }));
     data.extend(screen.attributes_formatted());
     data
@@ -95,15 +99,29 @@ pub(crate) fn snapshot(screen: &vt100::Screen) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn cells_equal(source: &vt100::Screen, restored: &vt100::Screen) {
+        let (rows, cols) = source.size();
+        for row in 0..rows {
+            for col in 0..cols {
+                assert_eq!(
+                    source.cell(row, col),
+                    restored.cell(row, col),
+                    "cell {row},{col}"
+                );
+            }
+        }
+    }
     fn continuation(setup: &[u8], suffix: &[u8]) {
         let mut source = vt100::Parser::new(6, 20, 0);
         source.process(setup);
         let mut restored = vt100::Parser::new(6, 20, 0);
         restored.process(&snapshot(source.screen()));
         assert_eq!(restored.screen().contents(), source.screen().contents());
+        cells_equal(source.screen(), restored.screen());
         source.process(suffix);
         restored.process(suffix);
         assert_eq!(restored.screen().contents(), source.screen().contents());
+        cells_equal(source.screen(), restored.screen());
         assert_eq!(
             restored.screen().cursor_position(),
             source.screen().cursor_position()
@@ -130,5 +148,11 @@ mod tests {
             b"\x1b[5;1Hend\r\nnext\x1b[?1049lX",
         );
         continuation(b"12345678901234567890", b"X");
+        continuation(b"\x1b[31m\x1b7\x1b[0m12345678901234567890\x1b[32m", b"X");
+        continuation(b"12345678901234567890\x1b7\x1b[31m\x1b[2;1Hnow", b"\x1b8X");
+        continuation(
+            "\x1b[31m\x1b7\x1b[0m123456789012345678中\x1b[32m".as_bytes(),
+            b"X",
+        );
     }
 }

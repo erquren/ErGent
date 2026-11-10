@@ -1,3 +1,4 @@
+mod query;
 mod recovery;
 mod screen;
 mod tool_status;
@@ -52,11 +53,17 @@ struct State {
     tool_turns: VecDeque<(String, String)>,
     inputs: VecDeque<(String, String, bool)>,
 }
+const MAX_REPLY_BYTES: usize = 32 * 1024;
+
 struct QueuedInput {
     viewer: String,
     lease_id: String,
     input_id: String,
     bytes: Vec<u8>,
+}
+enum QueuedWrite {
+    User(QueuedInput),
+    Reply(Vec<u8>),
 }
 struct Session {
     event_token: String,
@@ -66,7 +73,7 @@ struct Session {
     close_lock: Mutex<()>,
 }
 struct Resources {
-    input: mpsc::SyncSender<QueuedInput>,
+    input: mpsc::SyncSender<QueuedWrite>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<ProcessKiller>,
@@ -265,7 +272,7 @@ impl TerminalManager {
             tool_turns: VecDeque::new(),
             inputs: VecDeque::new(),
         }));
-        let (input, input_rx) = mpsc::sync_channel::<QueuedInput>(32);
+        let (input, input_rx) = mpsc::sync_channel::<QueuedWrite>(32);
         let session = Arc::new(Session {
             event_token,
             config,
@@ -299,42 +306,66 @@ impl TerminalManager {
                         .map(|resources| resources.writer.clone())
                         .ok_or_else(|| anyhow!("terminal has exited"))?;
                     let mut writer = writer.lock();
-                    check_lease(&session.state.lock(), &input.viewer, &input.lease_id)?;
-                    writer.write_all(&input.bytes)?;
+                    let state = session.state.lock();
+                    let bytes = match &input {
+                        QueuedWrite::User(input) => {
+                            check_lease(&state, &input.viewer, &input.lease_id)?;
+                            &input.bytes
+                        }
+                        QueuedWrite::Reply(bytes) => {
+                            if state.info.lifecycle != "running" {
+                                bail!("terminal is not running");
+                            }
+                            bytes
+                        }
+                    };
+                    drop(state);
+                    writer.write_all(bytes)?;
+                    writer.flush()?;
                     Ok(())
                 })();
-                let mut state = session.state.lock();
-                if result.is_ok() {
-                    if let Some((_, _, written)) = state
-                        .inputs
-                        .iter_mut()
-                        .find(|(viewer, id, _)| viewer == &input.viewer && id == &input.input_id)
-                    {
-                        *written = true;
+                match input {
+                    QueuedWrite::User(input) => {
+                        let mut state = session.state.lock();
+                        if result.is_ok() {
+                            if let Some((_, _, written)) =
+                                state.inputs.iter_mut().find(|(viewer, id, _)| {
+                                    viewer == &input.viewer && id == &input.input_id
+                                })
+                            {
+                                *written = true;
+                            }
+                            send(
+                                &input_events,
+                                &input.viewer,
+                                Event::InputAck {
+                                    input_id: input.input_id,
+                                },
+                            );
+                        } else {
+                            // A write error may mean partial delivery. Never retry it.
+                            send(
+                                &input_events,
+                                &input.viewer,
+                                Event::InputRejected {
+                                    session_id: state.info.id.clone(),
+                                    input_id: input.input_id,
+                                    message: "输入结果未确认，不会自动重发".into(),
+                                },
+                            );
+                        }
                     }
-                    send(
-                        &input_events,
-                        &input.viewer,
-                        Event::InputAck {
-                            input_id: input.input_id,
-                        },
-                    );
-                } else {
-                    // A write error may mean partial delivery. Never retry it.
-                    send(
-                        &input_events,
-                        &input.viewer,
-                        Event::InputRejected {
-                            session_id: state.info.id.clone(),
-                            input_id: input.input_id,
-                            message: "输入结果未确认，不会自动重发".into(),
-                        },
-                    );
+                    QueuedWrite::Reply(_) if result.is_err() => {
+                        query_reply_failed(&session.state.lock(), &input_events);
+                    }
+                    QueuedWrite::Reply(_) => {}
                 }
             }
         });
         sessions.insert(id.into(), session.clone());
         let read_state = state.clone();
+        let reply_queue = session.resources.lock().as_ref().unwrap().input.clone();
+        let reply_events = self.events.clone();
         #[cfg(windows)]
         let startup_writer = Arc::downgrade(&session.resources.lock().as_ref().unwrap().writer);
         #[cfg(unix)]
@@ -405,7 +436,8 @@ impl TerminalManager {
                         let Some(parser) = parser.as_mut() else {
                             break false;
                         };
-                        recovery.process(parser, bytes);
+                        let replies = recovery.process(parser, bytes);
+                        enqueue_replies(&s, &reply_events, &reply_queue, replies);
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                     #[cfg(unix)]
@@ -801,12 +833,12 @@ impl TerminalManager {
                     .ok_or_else(|| anyhow!("terminal has exited"))?;
                 if resources
                     .input
-                    .try_send(QueuedInput {
+                    .try_send(QueuedWrite::User(QueuedInput {
                         viewer: viewer.into(),
                         lease_id,
                         input_id: input_id.clone(),
                         bytes,
-                    })
+                    }))
                     .is_err()
                 {
                     send(
@@ -868,6 +900,39 @@ impl Drop for TerminalManager {
         }
     }
 }
+fn enqueue_replies(
+    state: &State,
+    events: &broadcast::Sender<AgentEvent>,
+    queue: &mpsc::SyncSender<QueuedWrite>,
+    replies: Vec<u8>,
+) {
+    if replies.is_empty() {
+        return;
+    }
+    // An 8 KiB PTY read expands to less than 32 KiB for these fixed responses.
+    // Keep the bound explicit if another query family is added later. Never
+    // block output/leases behind a non-reading child, or retry partial writes.
+    if replies.len() > MAX_REPLY_BYTES || queue.try_send(QueuedWrite::Reply(replies)).is_err() {
+        query_reply_failed(state, events);
+    }
+}
+
+fn query_reply_failed(state: &State, events: &broadcast::Sender<AgentEvent>) {
+    // No query bytes or user data in diagnostics. Ordinary input remains protected
+    // by its lease even if the internal terminal-response queue is saturated.
+    eprintln!("terminal query reply failed or queue full; reply was not retried");
+    for viewer in &state.viewers {
+        send(
+            events,
+            viewer,
+            Event::error(
+                "terminal_query_reply_failed",
+                "终端查询应答失败，应用可能正在等待；未自动重发",
+            ),
+        );
+    }
+}
+
 fn record_exit(
     state: &Mutex<State>,
     events: &broadcast::Sender<AgentEvent>,
@@ -1052,6 +1117,29 @@ mod tests {
             tool_turns: VecDeque::new(),
             inputs: VecDeque::new(),
         })
+    }
+
+    #[test]
+    fn terminal_reply_queue_is_bounded_and_reports_overload_without_blocking() {
+        let state = running_state();
+        let (events, mut receiver) = broadcast::channel(16);
+        let (queue, pending) = mpsc::sync_channel(1);
+        enqueue_replies(&state.lock(), &events, &queue, Vec::new());
+        assert!(pending.try_recv().is_err());
+        enqueue_replies(&state.lock(), &events, &queue, b"\x1b[1;1R".to_vec());
+        enqueue_replies(&state.lock(), &events, &queue, b"\x1b[2;2R".to_vec());
+        assert!(matches!(receiver.try_recv().unwrap(), AgentEvent::Viewer {
+            event: Event::Error { code, .. }, ..
+        } if code == "terminal_query_reply_failed"));
+        assert!(
+            matches!(pending.try_recv().unwrap(), QueuedWrite::Reply(bytes) if bytes == b"\x1b[1;1R")
+        );
+        assert!(pending.try_recv().is_err());
+        enqueue_replies(&state.lock(), &events, &queue, vec![0; MAX_REPLY_BYTES + 1]);
+        assert!(pending.try_recv().is_err());
+        assert!(receiver.try_recv().is_ok());
+        assert!(check_lease(&state.lock(), "viewer", "lease").is_ok());
+        assert!(check_lease(&state.lock(), "other", "lease").is_err());
     }
 
     #[test]
@@ -1269,6 +1357,54 @@ mod tests {
         manager.close("a").unwrap();
         manager.close("b").unwrap();
     }
+    #[cfg(unix)]
+    #[test]
+    fn real_pty_answers_cursor_queries_with_no_viewer_or_input_lease() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = TerminalManager::new("machine".into(), "epoch".into());
+        manager
+            .create(
+                "query",
+                CreateTerminal {
+                    title: "query".into(),
+                    cwd: tmp.path().to_string_lossy().into(),
+                    cols: 80,
+                    rows: 24,
+                },
+            )
+            .unwrap();
+        let session = manager.get("query").unwrap();
+        assert!(session.state.lock().viewers.is_empty());
+        assert!(session.state.lock().lease.is_none());
+        // Launch only this synthetic local fixture. It reads exactly one CPR in
+        // raw mode, as a crossterm application does. An unanswered query blocks
+        // dd and the completion marker can never be printed.
+        session.resources.lock().as_ref().unwrap().writer.lock().write_all(
+            b"stty -echo -icanon min 1 time 0; printf '\\033[4;9H\\033[6n'; dd bs=1 count=6 2>/dev/null | od -An -tx1; printf '\\nQUERY_%s\\n' COMPLETE; stty sane\r"
+        ).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let screen = session
+                .state
+                .lock()
+                .parser
+                .as_ref()
+                .unwrap()
+                .screen()
+                .contents();
+            if screen.contains("QUERY_COMPLETE") {
+                assert!(screen.contains("1b 5b 34 3b 39 52"));
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "PTY did not receive its cursor reply"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        manager.close("query").unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn reconnect_invalidates_streams_and_rechecks_queued_writes() {

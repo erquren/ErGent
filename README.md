@@ -12,11 +12,20 @@ ErGent 是一个浏览器里的个人开发工作台，用于集中访问多台�
 
 A personal development workspace in your browser, with native Agents exposing real shell terminals across your devices.
 
-**当前版本：v1.5.0** · [下载发布包](https://github.com/erquren/ErGent/releases/tag/v1.5.0) · [Docker Hub](https://hub.docker.com/r/erquren/ergent)
+**当前版本：v1.6.0** · [下载发布包](https://github.com/erquren/ErGent/releases/tag/v1.6.0) · [Docker Hub](https://hub.docker.com/r/erquren/ergent)
 
 原生包支持 Windows、Linux、macOS 的 x86_64 / ARM64；Docker 镜像支持 Linux amd64 / arm64，具体标签以实际发布结果为准。
 
-## v1.5.0：终端翻页与弹窗交互
+## v1.6.0：Codex 类终端切换与查询恢复
+
+- 由客户端统一应答光标位置、终端状态和基本设备属性查询，切换终端、恢复画面或没有网页观看时，应用也能收到应答。
+- 处理过的查询不会在网页回放时再次应答，多个窗口观看同一终端不会重复发送查询回复。
+- 修复快照恢复在行末延迟换行时可能污染文字颜色的问题，补充真实 PTY 的 Codex 类交互回归测试。
+- 保持单写入者租约与输入不自动重发规则。升级客户端前请先保存或结束终端任务；本次不自动升级运行中的设备。
+
+原生包版本为 1.6.0。Docker 镜像独立发布，标签以实际发布结果为准。
+
+## v1.5.0：终端翻页与弹窗交互（历史说明）
 
 - 触控设备增加“上一页 / 下一页 / 回到最新”：普通终端翻看本地保留的记录，全屏应用发送 PageUp、PageDown、End；翻页不会自动打开键盘。
 - Ctrl、Ctrl+C 和 Tab 收入“更多”，主要快捷键保持同一行；桌面鼠标设备隐藏触控快捷键栏。

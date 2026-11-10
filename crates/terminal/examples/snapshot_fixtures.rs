@@ -26,6 +26,21 @@ fn main() {
             b"\x1b[5;1Hend\r\nnext\x1b[?1049lX",
         ),
         ("pending wrap", b"12345678901234567890", b"X"),
+        (
+            "pending wrap with saved attributes",
+            b"\x1b[31m\x1b7\x1b[0m12345678901234567890\x1b[32m",
+            b"X",
+        ),
+        (
+            "saved pending wrap with current attributes",
+            b"12345678901234567890\x1b7\x1b[31m\x1b[2;1Hnow",
+            b"\x1b8X",
+        ),
+        (
+            "wide pending wrap with saved attributes",
+            "\x1b[31m\x1b7\x1b[0m123456789012345678中\x1b[32m".as_bytes(),
+            b"X",
+        ),
     ];
     println!("[");
     for (index, (name, setup, suffix)) in cases.iter().enumerate() {
