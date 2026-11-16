@@ -12,11 +12,26 @@ ErGent 是一个浏览器里的个人开发工作台，用于集中访问多台�
 
 A personal development workspace in your browser, with native Agents exposing real shell terminals across your devices.
 
-**当前发布版：v1.6.0** · [下载发布包](https://github.com/erquren/ErGent/releases/tag/v1.6.0) · [v1.6.0 源码](https://github.com/erquren/ErGent/tree/v1.6.0) · [Docker Hub](https://hub.docker.com/r/erquren/ergent)
+**当前版本：v1.7.0** · [下载发布包](https://github.com/erquren/ErGent/releases/tag/v1.7.0) · [v1.7.0 源码](https://github.com/erquren/ErGent/tree/v1.7.0) · [Docker Hub](https://hub.docker.com/r/erquren/ergent)
 
 原生包支持 Windows、Linux、macOS 的 x86_64 / ARM64；Docker 镜像支持 Linux amd64 / arm64，具体标签以实际发布结果为准。
 
-## v1.6.0：Codex 类终端切换与查询恢复
+## v1.7.0 Changelog：设备排序、稳定布局与终端可读性
+
+- **设备拖动排序**：左侧设备列表可拖动调整顺序；按账号保存在当前浏览器，新设备追加显示。此顺序不跨浏览器或设备同步。
+- **中英文布局一致**：固定常用控件的布局尺寸与间距，减少切换语言时的页面跳动，并补充双语布局回归测试。
+- **绿色背景抑制**：新增终端颜色选项，改善 SSH 中部分可写目录的绿色背景可读性。它处理 ANSI 颜色，不修改远端权限或 `LS_COLORS`，也可能影响其他程序使用的相同颜色。
+- **完整保留 v1.6.0 终端恢复修复**：Agent 统一应答终端查询，避免 Codex 类应用切换、恢复时停滞；保留快照行末颜色修复与多窗口回归。
+
+### 1.7.0 下载、Docker 与升级
+
+原生包为 `ergent-1.7.0-<平台>-<架构>`，提供 Windows、Linux、macOS 的 x86_64 / ARM64 包及 `.sha256`、`SHA256SUMS` 校验文件；实际产物以 [v1.7.0 发布页](https://github.com/erquren/ErGent/releases/tag/v1.7.0) 为准。
+
+Docker 独立发布到 `erquren/ergent:1.7.0`，支持 Linux amd64 / arm64，不自动更新 `latest`。原生发布成功不等于 Docker 发布成功，镜像可用性以独立 Docker 流水线结果为准。
+
+升级前备份数据库、Agent 配置并保存终端工作，更新 Server、Agent 和网页后刷新浏览器。**重启 Agent 会结束它管理的终端。** 从 1.6.0 升级没有新增数据库迁移，协议仍为 `ergent.preview.v3`；从更早版本升级另见 [升级指南](docs/upgrade.md)。发布不会自动升级正在运行的设备。
+
+## v1.6.0：Codex 类终端切换与查询恢复（历史说明）
 
 - 修复 Codex 类终端应用在切换终端、恢复画面或没有网页观看时，因等待光标位置查询回复而停滞的问题。客户端（Agent）统一处理光标位置、终端状态和基本设备属性查询，不再依赖网页是否正在观看。
 - 已处理的查询不会在网页回放时重复应答，多个窗口观看同一终端也不会重复发送回复；保留单写入者租约和输入不自动重发规则。
