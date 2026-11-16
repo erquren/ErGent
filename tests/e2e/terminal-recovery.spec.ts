@@ -374,9 +374,24 @@ test("authoritative snapshots preserve ANSI continuation in the actual xterm par
       ),
     );
   const contents = (term: InstanceType<typeof Terminal>) =>
-    Array.from({ length: term.rows }, (_, row) =>
-      term.buffer.active.getLine(row)?.translateToString(true),
-    );
+    Array.from({ length: term.rows }, (_, row) => {
+      const line = term.buffer.active.getLine(row)!;
+      return Array.from({ length: term.cols }, (_, col) => {
+        const cell = line.getCell(col)!;
+        return [
+          cell.getChars(),
+          cell.getWidth(),
+          cell.getFgColorMode(),
+          cell.getFgColor(),
+          cell.getBgColorMode(),
+          cell.getBgColor(),
+          cell.isBold(),
+          cell.isItalic(),
+          cell.isUnderline(),
+          cell.isInverse(),
+        ];
+      });
+    });
   for (const fixture of JSON.parse(fixtures.stdout) as {
     name: string;
     setup: string;

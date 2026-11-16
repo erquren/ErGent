@@ -224,6 +224,16 @@ The web UI checks authentication about 1.5 seconds after disconnection. If the S
 发布包不含密码、令牌、数据库、AI CLI 或开发环境。
 manifest.json 记录版本、Git commit、工作区是否有未提交修改及文件校验值；外部 .sha256 校验压缩包。
 
+### 升级到 1.6.0 / Upgrade to 1.6.0
+
+- 客户端统一应答 Codex 类应用使用的光标、状态和基本设备属性查询；切换、重新同步、没有观看者时不再依赖网页应答，多个窗口也不会重复应答。
+- 修复快照恢复在行末延迟换行时误用文字颜色的问题。
+- 保留单写入者租约及输入不自动重发规则，未扩展快照仿真器支持范围。
+
+从 1.5.0 升级保留数据库和客户端配置，无需重新注册；无新增数据库迁移，协议仍为 `ergent.preview.v3`。需要更新客户端（Agent）才能获得查询修复。**重启客户端会结束运行中的终端，请先保存或结束任务。** 更新网页后刷新浏览器。Docker 镜像独立发布，本原生包发布不代表 `1.6.0` 镜像已经可用。
+
+Keep the database and client configuration when upgrading from 1.5.0. No migration or protocol change is required. Update Agents to receive the query fix. **Save or finish terminal work before restarting an Agent, which ends its running terminals.** Refresh browsers after updating the web UI. Docker images are published separately.
+
 ### 升级到 1.5.0 / Upgrade to 1.5.0
 
 本版增加触控终端“上一页 / 下一页 / 回到最新”，将 Ctrl、Ctrl+C 和 Tab 收入“更多”，收紧顶部布局，并防止模态弹窗因点击外部或拖动选字而误关闭。普通终端翻看保留的本地记录；全屏应用接收 PageUp、PageDown、End，实际效果由应用决定。

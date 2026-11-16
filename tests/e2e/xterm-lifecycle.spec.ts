@@ -201,3 +201,33 @@ test("bundled xterm ignores queued viewport reset callbacks after disposal", () 
   expect(bundle.timers.length).toBeGreaterThan(0);
   expect(() => bundle.drain()).not.toThrow();
 });
+
+test("split directory color sequences preserve xterm's original buffer attributes", async () => {
+  const bundle = bundledXterm();
+  const term = new bundle.Terminal({ cols: 40, rows: 5 });
+  const write = (data: string) => {
+    let complete = false;
+    term.write(data, () => {
+      complete = true;
+    });
+    bundle.drain();
+    expect(complete).toBe(true);
+  };
+  try {
+    write("\x1b[34;");
+    write("42mother\x1b[0m \x1b[30;42msticky\x1b[0m normal");
+    const line = term.buffer.active.getLine(0);
+    expect([
+      line.getCell(0).getFgColor(),
+      line.getCell(0).getBgColor(),
+    ]).toEqual([4, 2]);
+    expect([
+      line.getCell(6).getFgColor(),
+      line.getCell(6).getBgColor(),
+    ]).toEqual([0, 2]);
+    expect(line.getCell(13).isFgDefault()).toBe(true);
+    expect(line.getCell(13).isBgDefault()).toBe(true);
+  } finally {
+    term.dispose();
+  }
+});

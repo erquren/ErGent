@@ -1,5 +1,11 @@
 // Canonical UI copy → English. Product names and terminal output are never translated.
 export const english: Record<string, string> = {
+  "隐藏 ANSI 绿底": "Hide ANSI green backgrounds",
+  "影响所有使用标准 ANSI 绿色背景的程序；关闭后恢复原样。":
+    "Applies to every app using the standard ANSI green background. Turn off to restore it.",
+  "排序 {name}，使用上下方向键移动": "Reorder {name}; use arrow keys to move",
+  "拖动排序，或使用上下方向键": "Drag to reorder, or use the arrow keys",
+  "{name} 已移动到第 {position} 位": "{name} moved to position {position}",
   终端翻页: "Terminal navigation",
   上一页: "Previous page",
   下一页: "Next page",

@@ -22,6 +22,7 @@ import {
   Settings2,
   PanelLeftClose,
   PanelLeftOpen,
+  GripVertical,
 } from "lucide-react";
 import type {
   Event,
@@ -33,7 +34,12 @@ import { api, ApiError, waitOperation } from "./api";
 import { AuthScreen } from "./AuthScreen";
 import { TerminalView } from "./TerminalView";
 import "./style.css";
-import { useAppearance, terminalTheme, terminalThemes } from "./theme";
+import {
+  useAppearance,
+  useHideGreenBackground,
+  terminalTheme,
+  terminalThemes,
+} from "./theme";
 import { GlassPopover } from "./GlassPopover";
 import "./glass.css";
 import { toolLabel } from "./tool-status";
@@ -44,11 +50,19 @@ import { DeviceManager } from "./DeviceManager";
 import { DeviceTerminals } from "./DeviceTerminals";
 import { DeviceMenu } from "./DeviceMenu";
 import { ModalDialog } from "./ModalDialog";
+import {
+  deviceOrderKey,
+  readDeviceOrder,
+  orderDevices,
+  moveDevice,
+} from "./device-order";
 import "./devices.css";
 
 function App() {
   const { preference, setPreference } = useLanguage();
   const { appearance, resolved, setAppearance } = useAppearance();
+  const [hideGreenBackground, setHideGreenBackground] =
+    useHideGreenBackground();
   const themePicker = (
     <GlassPopover
       label={t("网页外观")}
@@ -164,6 +178,20 @@ function App() {
     };
   }, []);
   const [user, setUser] = useState<string | null>(null);
+  const [deviceOrder, setDeviceOrder] = useState<string[]>([]);
+  const [draggedDevice, setDraggedDevice] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const [orderAnnouncement, setOrderAnnouncement] = useState("");
+  const touchDrag = useRef<string | null>(null);
+  useEffect(() => {
+    setDeviceOrder(user ? readDeviceOrder(user) : []);
+    const sync = (event: StorageEvent) => {
+      if (user && (event.key === deviceOrderKey(user) || event.key === null))
+        setDeviceOrder(readDeviceOrder(user));
+    };
+    window.addEventListener("storage", sync);
+    return () => window.removeEventListener("storage", sync);
+  }, [user]);
   const [machines, setMachines] = useState<MachineInfo[]>([]),
     [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null),
@@ -359,6 +387,33 @@ function App() {
     machine = machines.find((m) => m.id === active?.machineId);
   const visible = machines.filter((m) => !m.revoked),
     online = visible.filter((m) => m.online);
+  const orderedDevices = orderDevices(visible, deviceOrder);
+  const reorderDevice = (from: string, to: string) => {
+    const ids = orderedDevices.map((m) => m.id);
+    const next = moveDevice(ids, from, to);
+    if (next === ids) return;
+    // Keep absent IDs at the end so a temporarily unavailable device is not forgotten.
+    const saved = [...next, ...deviceOrder.filter((id) => !ids.includes(id))];
+    setDeviceOrder(saved);
+    try {
+      if (user)
+        localStorage.setItem(deviceOrderKey(user), JSON.stringify(saved));
+    } catch {
+      /* Ordering still works for this session if storage is unavailable. */
+    }
+    const name = visible.find((m) => m.id === from)?.name ?? "";
+    setOrderAnnouncement(
+      t("{name} 已移动到第 {position} 位", {
+        name,
+        position: next.indexOf(from) + 1,
+      }),
+    );
+  };
+  const clearDrag = () => {
+    touchDrag.current = null;
+    setDraggedDevice(null);
+    setDropTarget(null);
+  };
   const terminalListMachine = visible.find(
     (m) => m.id === terminalListMachineId,
   );
@@ -600,9 +655,83 @@ function App() {
           </div>
         </div>
         <nav className="machine-list">
-          {visible.map((m) => (
-            <div className="machine-group" key={m.id}>
+          <span className="sr-only" aria-live="polite">
+            {orderAnnouncement}
+          </span>
+          {orderedDevices.map((m, index) => (
+            <div
+              className={`machine-group ${draggedDevice === m.id ? "machine-dragging" : ""} ${dropTarget === m.id && draggedDevice !== m.id ? "machine-drop-target" : ""}`}
+              key={m.id}
+              data-machine-id={m.id}
+              onDragOver={(event) => {
+                if (!draggedDevice) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                setDropTarget(m.id);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                if (draggedDevice) reorderDevice(draggedDevice, m.id);
+                clearDrag();
+              }}
+            >
               <div className="machine-heading">
+                <button
+                  type="button"
+                  className="machine-drag-handle"
+                  aria-label={t("排序 {name}，使用上下方向键移动", {
+                    name: m.name,
+                  })}
+                  title={t("拖动排序，或使用上下方向键")}
+                  disabled={orderedDevices.length < 2}
+                  draggable={orderedDevices.length > 1}
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("text/plain", m.id);
+                    setDraggedDevice(m.id);
+                  }}
+                  onDragEnd={clearDrag}
+                  onKeyDown={(event) => {
+                    const offset =
+                      event.key === "ArrowUp"
+                        ? -1
+                        : event.key === "ArrowDown"
+                          ? 1
+                          : 0;
+                    if (!offset) return;
+                    event.preventDefault();
+                    const target = orderedDevices[index + offset];
+                    if (target) reorderDevice(m.id, target.id);
+                  }}
+                  onPointerDown={(event) => {
+                    if (event.pointerType === "mouse") return;
+                    touchDrag.current = m.id;
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    setDraggedDevice(m.id);
+                  }}
+                  onPointerMove={(event) => {
+                    if (!touchDrag.current) return;
+                    const target = document
+                      .elementFromPoint(event.clientX, event.clientY)
+                      ?.closest<HTMLElement>(".machine-group");
+                    setDropTarget(target?.dataset.machineId ?? null);
+                  }}
+                  onPointerUp={(event) => {
+                    if (!touchDrag.current) return;
+                    const target = document
+                      .elementFromPoint(event.clientX, event.clientY)
+                      ?.closest<HTMLElement>(".machine-group");
+                    if (target?.dataset.machineId)
+                      reorderDevice(
+                        touchDrag.current,
+                        target.dataset.machineId,
+                      );
+                    clearDrag();
+                  }}
+                  onPointerCancel={clearDrag}
+                >
+                  <GripVertical size={16} />
+                </button>
                 <button
                   type="button"
                   className="machine-name machine-toggle"
@@ -974,6 +1103,23 @@ function App() {
                             );
                           })}
                         </div>
+                        <label className="terminal-green-setting">
+                          <span>
+                            <strong>{t("隐藏 ANSI 绿底")}</strong>
+                            <small>
+                              {t(
+                                "影响所有使用标准 ANSI 绿色背景的程序；关闭后恢复原样。",
+                              )}
+                            </small>
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={hideGreenBackground}
+                            onChange={(event) =>
+                              setHideGreenBackground(event.target.checked)
+                            }
+                          />
+                        </label>
                       </>
                     )}
                   </GlassPopover>
@@ -1004,6 +1150,7 @@ function App() {
               <TerminalView
                 key={active.id}
                 theme={palette}
+                hideGreenBackground={hideGreenBackground}
                 session={active}
                 socket={machine?.online ? socket : null}
               />

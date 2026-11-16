@@ -163,3 +163,36 @@ export function terminalTheme(
 ): ITheme {
   return palettes[choice ?? "auto"] ?? palettes[appearance];
 }
+
+const hideGreenBackgroundKey = "ergent.terminal.hide-green-background";
+function savedHideGreenBackground(): boolean {
+  try {
+    return localStorage.getItem(hideGreenBackgroundKey) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+// This browser-only preference never changes the remote terminal or its data.
+export function useHideGreenBackground() {
+  const [hidden, setHidden] = useState(savedHideGreenBackground);
+  useEffect(() => {
+    const stored = (event: StorageEvent) => {
+      if (event.key === hideGreenBackgroundKey || event.key === null)
+        setHidden(savedHideGreenBackground());
+    };
+    window.addEventListener("storage", stored);
+    return () => window.removeEventListener("storage", stored);
+  }, []);
+  return [
+    hidden,
+    (value: boolean) => {
+      setHidden(value);
+      try {
+        localStorage.setItem(hideGreenBackgroundKey, String(value));
+      } catch {
+        /* Keep the in-memory preference. */
+      }
+    },
+  ] as const;
+}

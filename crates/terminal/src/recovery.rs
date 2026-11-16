@@ -25,22 +25,42 @@ impl Recovery {
             checkpoint: None,
         }
     }
-    pub fn process(&mut self, parser: &mut vt100::Parser, bytes: &[u8]) {
+    pub fn process(&mut self, parser: &mut vt100::Parser, bytes: &[u8]) -> Vec<u8> {
         let was_ground = self.ground;
         let mut boundary = None;
+        let mut queries = Vec::new();
+        let mut filtered = bytes.to_vec();
         for (index, &byte) in bytes.iter().enumerate() {
-            let mut probe = Boundary(self.ground && (byte < 0x20 || byte == 0x7f) && byte != 0x1b);
+            let mut probe = Boundary {
+                ground: self.ground && (byte < 0x20 || byte == 0x7f) && byte != 0x1b,
+                query: None,
+            };
             self.probe
                 .as_mut()
                 .expect("live parser probe")
                 .advance(&mut probe, byte);
-            self.ground = probe.0;
+            self.ground = probe.ground;
+            if let Some(query) = probe.query {
+                // CAN terminates this CSI without invoking browser replies. A
+                // one-byte replacement preserves all replay byte offsets, even
+                // when the query prefix was delivered in an earlier chunk.
+                filtered[index] = 0x18;
+                queries.push((index, query));
+            }
             if self.ground {
                 boundary = Some(index + 1);
             }
         }
+        let mut replies = Vec::new();
+        let mut start = 0;
+        for (index, query) in queries {
+            parser.process(&filtered[start..=index]);
+            replies.extend(query.reply(parser.screen()));
+            start = index + 1;
+        }
+        let bytes = filtered.as_slice();
         if let Some(end) = boundary {
-            parser.process(&bytes[..end]);
+            parser.process(&bytes[start..end]);
             self.checkpoint = (end != bytes.len()).then(|| {
                 (
                     self.seq + end as u64,
@@ -59,6 +79,7 @@ impl Recovery {
         if self.bytes.len() > REPLAY_BYTES {
             self.bytes.drain(..self.bytes.len() - REPLAY_BYTES);
         }
+        replies
     }
     pub fn contains(&self, seq: u64) -> bool {
         (self.seq - self.bytes.len() as u64..=self.seq).contains(&seq)
@@ -99,24 +120,34 @@ impl Recovery {
 /// Conservatively identify complete parser boundaries with the *same* VTE parser
 /// as vt100. C0 controls inside CSI/OSC do not finish that sequence. OSC/DCS
 /// terminated by ESC are still inside an escape until its final byte arrives.
-struct Boundary(bool);
+struct Boundary {
+    ground: bool,
+    query: Option<super::query::Query>,
+}
 impl vte::Perform for Boundary {
     fn print(&mut self, _: char) {
-        self.0 = true;
+        self.ground = true;
     }
     fn execute(&mut self, byte: u8) {
         if byte == 0x18 || byte == 0x1a {
-            self.0 = true;
+            self.ground = true;
         }
     }
-    fn csi_dispatch(&mut self, _: &vte::Params, _: &[u8], _: bool, _: char) {
-        self.0 = true;
+    fn csi_dispatch(
+        &mut self,
+        params: &vte::Params,
+        intermediates: &[u8],
+        ignore: bool,
+        action: char,
+    ) {
+        self.ground = true;
+        self.query = super::query::Query::parse(params, intermediates, ignore, action);
     }
     fn esc_dispatch(&mut self, _: &[u8], _: bool, _: u8) {
-        self.0 = true;
+        self.ground = true;
     }
     fn osc_dispatch(&mut self, _: &[&[u8]], bell: bool) {
-        self.0 = bell;
+        self.ground = bell;
     }
 }
 
@@ -142,6 +173,85 @@ mod tests {
             parser.screen().cursor_position()
         );
     }
+    #[test]
+    fn live_queries_reply_once_at_their_actual_cursor_positions() {
+        let mut parser = vt100::Parser::new(24, 80, 0);
+        let mut recovery = Recovery::new();
+        let bytes = b"\x1b[2;3H\x1b[6n\x1b[5;8H\x1b[6n\x1b[5n\x1b[c\x1b[>c";
+        let expected = b"\x1b[2;3R\x1b[5;8R\x1b[0n\x1b[?1;2c\x1b[>0;0;0c";
+        assert_eq!(recovery.process(&mut parser, bytes), expected);
+        assert_eq!(recovery.seq, bytes.len() as u64);
+        let replay = recovery.read(0).unwrap();
+        assert!(!replay.windows(4).any(|w| w == b"\x1b[6n"));
+        let (seq, snapshot) = recovery.snapshot(&parser).unwrap();
+        assert_eq!(seq, recovery.seq);
+        // Repeated attachments, including two concurrent viewers, read only
+        // canceled queries. The wire does not carry browser reply authority.
+        for _ in 0..3 {
+            let mut viewer = vt100::Parser::new(24, 80, 0);
+            let mut replayed = Recovery::new();
+            assert!(replayed.process(&mut viewer, &replay).is_empty());
+            let mut restored = Recovery::new();
+            assert!(restored.process(&mut viewer, &snapshot).is_empty());
+        }
+    }
+
+    #[test]
+    fn query_prefixes_can_span_every_read_boundary() {
+        let bytes = b"before\x1b[2;7H\x1b[6nafter\x1b[?6n\x1b[5n\x1b[0c\x1b[>0c";
+        for split in 0..=bytes.len() {
+            let mut parser = vt100::Parser::new(24, 80, 0);
+            let mut recovery = Recovery::new();
+            let mut replies = recovery.process(&mut parser, &bytes[..split]);
+            replies.extend(recovery.process(&mut parser, &bytes[split..]));
+            assert_eq!(
+                replies, b"\x1b[2;7R\x1b[?2;12R\x1b[0n\x1b[?1;2c\x1b[>0;0;0c",
+                "split {split}"
+            );
+            assert!(parser.screen().contents().contains("after"));
+        }
+    }
+
+    #[test]
+    fn cursor_reports_respect_origin_mode_dimensions_and_pending_wrap() {
+        let mut parser = vt100::Parser::new(6, 20, 0);
+        let mut recovery = Recovery::new();
+        assert_eq!(
+            recovery.process(&mut parser, b"\x1b[2;5r\x1b[?6h\x1b[2;5H\x1b[6n"),
+            b"\x1b[2;5R"
+        );
+        assert_eq!(
+            recovery.process(
+                &mut parser,
+                b"\x1b[?6l\x1b[r\x1b[H12345678901234567890\x1b[6n"
+            ),
+            b"\x1b[1;20R"
+        );
+        parser.set_size(10, 30);
+        recovery.resized();
+        assert_eq!(
+            recovery.process(&mut parser, b"\x1b[10;30H\x1b[6n"),
+            b"\x1b[10;30R"
+        );
+    }
+
+    #[test]
+    fn embedded_and_malformed_queries_cannot_generate_replies() {
+        let mut parser = vt100::Parser::new(24, 80, 0);
+        let mut recovery = Recovery::new();
+        // CSI text inside OSC/DCS is data. ESC inside OSC can end it, so use
+        // query-looking content without a new ESC as real opaque payloads do.
+        for bytes in [
+            b"\x1b]0;title [6n [c\x07".as_slice(),
+            b"\x1bPq[6n[c\x1b\\".as_slice(),
+            b"\x1b[6;7n\x1b[6:1n\x1b[>6n\x1b[1c".as_slice(),
+            b"\x1b[6\x18n".as_slice(),
+        ] {
+            assert!(recovery.process(&mut parser, bytes).is_empty());
+        }
+        assert_eq!(recovery.process(&mut parser, b"\x1b[5n"), b"\x1b[0n");
+    }
+
     #[test]
     fn snapshots_preserve_partial_ansi_utf8_and_alternate_screen() {
         recover(&[b"primary\x1b[?1049hTUI\x1b[3", b"1"]);
